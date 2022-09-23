@@ -1,24 +1,24 @@
 
 
 initialize() {
-
+	
 	// setting parameters for running in slimgui which is comfy for setting up. Then one can run SLIM in CLI on a cluster by passing those parameters like this: slim -d u=1.25e-6 -d r=1e-8 -d N=500 ... base_model.slim 
 	if (exists("slimgui")){
-	setwd("/home/vasili/ebc/projects/SLiM/Anc_contr_basal_model");
-	defineConstant("N", 5e2); // population size
-	defineConstant("u", 2e-6); // mutation rate
-	defineConstant("r", 1e-8); // recombination rate
-	defineConstant("sd_beta", 0.1); // sd of the distribution where betas are drawn from (centered at 0)
-	defineConstant("sd_noise", 0.1); // sd of the distribution where environmental noise is drawn from (centered at 0)
-	defineConstant("w", INF); // omega - sd of the distibution of the fitnes function; INF results in neutrality
-	defineConstant("opt", 0); // trait optimum
-	defineConstant("l_chr", 5e1); // length of a single chromosome
-	defineConstant("n_chr", 50); // number of chromosomes in the genome
-	defineConstant("G", 10*N); // number of generations to run the birn-in stage of the simulation. 10*N is a rule-of-thumb recommenation. We can use the trick of Yair and Coop: run 60-70% of the burn-in, save the resuts and use them for all simulations to save time.
-	defineConstant("output_cycle", 100); // print intermediate stats every <output_cycle> generation
-	defineConstant("output_stats", "output_stats.tsv");
-	defineConstant("output_QTLs", "output_QTLs.tsv");
-	defineConstant("output_inds", "output_inds.tsv");
+		setwd("/home/vasili/ebc/projects/SLiM/Anc_contr_basal_model");
+		defineConstant("N", 5e2); // population size
+		defineConstant("u", 2e-5); // mutation rate
+		defineConstant("r", 1e-8); // recombination rate
+		defineConstant("sd_beta", 0.1); // sd of the distribution where betas are drawn from (centered at 0)
+		defineConstant("h2", 0.8); // set heritability to calcualte environmental noise sd
+		defineConstant("w", INF); // omega - sd of the distibution of the fitnes function; INF results in neutrality
+		defineConstant("opt", 0); // trait optimum
+		defineConstant("l_chr", 5e1); // length of a single chromosome
+		defineConstant("n_chr", 50); // number of chromosomes in the genome
+		defineConstant("G", 10*N); // number of generations to run the birn-in stage of the simulation. 10*N is a rule-of-thumb recommenation. We can use the trick of Yair and Coop: run 60-70% of the burn-in, save the resuts and use them for all simulations to save time.
+		defineConstant("output_cycle", 100); // print intermediate stats every <output_cycle> generation
+		defineConstant("output_stats", "output_stats.tsv");
+		defineConstant("output_QTLs", "output_QTLs.tsv");
+		defineConstant("output_inds", "output_inds.tsv");
 	}
 	
 	initializeMutationRate(u);
@@ -34,14 +34,14 @@ initialize() {
 	
 	
 	// two types genomic elements, each having only its specific type of mutations
-	initializeGenomicElementType("g1", m1, 1.0); 
+	initializeGenomicElementType("g1", m1, 1.0);
 	initializeGenomicElementType("g2", m2, 1.0);
-
+	
 	// we want each chromosome to consist of 1 bp of type g2 in the middle and neutral g1 around it. The code below is doing this
 	n_start = seq(0, n_chr*l_chr-1, by = l_chr);
 	
 	i = 0;
-
+	
 	while (i < length(n_start)){
 		midpoint = asInteger(n_start[i] + l_chr/2);
 		initializeGenomicElement(g1, n_start[i], midpoint - 2);
@@ -63,64 +63,74 @@ initialize() {
 }
 
 
+// Make the QTL effects neutral --
+// the assigned selection coefficients are actually how we track their effect sizes
+// and we calculate fitness based on an individual's total phenotype each generation
+// by changing the fitnessScaling attribute
 mutationEffect(m2) {
-	// Make the QTL effects neutral --
-	// the assigned selection coefficients are actually how we track their effect sizes
-	// and we calculate fitness based on an individual's total phenotype each generation
-	// by changing the fitnessScaling attribute
 	return 1.0;
 }
+
 
 // reschedulting block s1 - the end of the simulation - in an N-dependent manner
 1 early() {
 	community.rescheduleScriptBlock(s1, start=G, end=G);
 	sim.addSubpop("p1", N);
-
+	
 	// starting files with some stats srom every 100 generations
-	line = paste("Generation", "GV", "PV", "h", sep = "\t");
+	line = paste("Generation", "GV", "PV", "h2", "h2_emp", sep = "\t");
 	writeFile(output_stats, line, append=T);
+
+	// this is needed only if I do assortative mating or anything else with the tagF of individuals
+	// p1.individuals.tagF = 0.0;
 }
 
 
 
 // calculate fitness for each individual; it is faster do update fitness scaling than to have a fitness callback
 1: late(){
-
-
-//	add2pheno = 2*sum(sim.substitutions.selectionCoeff); // substitutions that contributes to all phenotype values, factor of 2 for homozygous. This is from Yair and Coop; if you want to activate this, don't forget to switch m2.convertToSubstitution to T. The only difference between the two methods should be memory usage
 	
-	inds = sim.subpopulations.individuals;
+	
+	//	add2pheno = 2*sum(sim.substitutions.selectionCoeff); // substitutions that contributes to all phenotype values, factor of 2 for homozygous. This is from Yair and Coop; if you want to activate this, don't forget to switch m2.convertToSubstitution to T. The only difference between the two methods should be memory usage
+	
+	inds = p1.individuals;
 	genevalue = inds.sumOfMutationsOfType(m2); // obtaining the genetic value of each individual
 	GV = asString(mean(genevalue)); // storing the mean GV for printing
-
+	
 	// next we generate noise and add it to the phenotype
-	noise = rnorm(N, 0, sd_noise);	
+	V_A = var(genevalue);
+	V_E = (V_A - h2 * V_A) / h2;
+	noise = rnorm(size(inds), 0, sqrt(V_E));
 	phenotypes = genevalue + noise;
-	PV = asString(mean(phenotypes)); // mean ohenotype for printing
-	h = var(genevalue) / var(phenotypes); // calculating narrow sense heritability (which in this model is equal to H)
-
+	
+	// storing the phenotype of each individual in its TagF. So far I don't plan to use it but just in case (modeling assortative mating or some other more advanced stuff).
+	//inds.tagF = phenotypes;
+	
+	PV = asString(mean(phenotypes)); // mean phenotype for printing
+	h2_emp = var(genevalue) / var(phenotypes); // calculating narrow sense heritability (which in this model is equal to H)
+	
 	// calculating each individual's fitness using a Gaussian distribution with mean == opt and sd == w
 	inds.fitnessScaling = exp(-((opt - phenotypes)^2) / (2*(w^2))) ;
-
 	
-
-	// printing out some info every 100 generations. Later will direct it to a file instead of the stdout
+	
+	
+	// printing out some info every 100 generations
 	if (sim.cycle % output_cycle == 0){
-	catn("Generation " + sim.cycle + " over\n writing output");
-	line = paste(sim.cycle, GV, PV, h, sep = "\t");
-	writeFile(output_stats, line, append=T);
-
-
-
-	// and also getting the position, allele frequency and beta of every QTL
-	m2muts = sim.mutationsOfType(m2);
-	m2muts = m2muts[order(m2muts.position)];
-	pos = m2muts.position;
-	betas = m2muts.selectionCoeff;
-	freqs = sim.mutationFrequencies(NULL, m2muts);
-//	sim.outputMutations(m2muts);
-
-	if(length(pos) > 0){
+		catn("Generation " + sim.cycle + " over\n writing output");
+		line = paste(sim.cycle, GV, PV, h2, h2_emp, sep = "\t");
+		writeFile(output_stats, line, append=T);
+		
+		
+		
+		// and also getting the position, allele frequency and beta of every QTL
+		m2muts = sim.mutationsOfType(m2);
+		m2muts = m2muts[order(m2muts.position)];
+		pos = m2muts.position;
+		betas = m2muts.selectionCoeff;
+		freqs = sim.mutationFrequencies(NULL, m2muts);
+		//	sim.outputMutations(m2muts);
+		
+		if(length(pos) > 0){
 			// this writes a table with generation, QTLs positions, freq and betas. The only problem is that I didn't find a way to avoid column names to be printed out every time so will have to clean those post-factum
 			gen = rep(sim.cycle, length(pos));
 			df = DataFrame("Generation", gen, "pos", pos, "freq", freqs, "betas", betas);
@@ -132,6 +142,14 @@ mutationEffect(m2) {
 
 }
 
+
+// this is just to keep it at hand if I will ever need it. So far I don't plan to simulate assortative mating
+//mateChoice() {
+//	phenotype = individual.tagF;
+//	others = sourceSubpop.individuals.tagF;
+//	return weights * dnorm(others, phenotype, 5.0);
+//}
+
 // output data at end of simulation -- needed to continue the simulation
 
 
@@ -140,8 +158,8 @@ s1 50000 late() {
 	//	sim.outputFull(output_burn_file,binary=T);
 	//	
 	//	// output the substitution info to a file
-//	if(!writeFile(output_sub_file, asString(2*sum(sim.substitutions.selectionCoeff)) )){stop("Error writing substitutions file.");}
-//	
+	//	if(!writeFile(output_sub_file, asString(2*sum(sim.substitutions.selectionCoeff)) )){stop("Error writing substitutions file.");}
+	//	
 	// writeFile(output_file, asString(2*sum(sim.substitutions.selectionCoeff)) );
 	// end simulation
 	sim.simulationFinished();
