@@ -1,0 +1,175 @@
+initialize() {
+	
+	// setting parameters for running in slimgui which is comfy for setting up. Then one can run SLIM in CLI on a cluster by passing those parameters like this: slim -d u=1.25e-6 -d r=1e-8 -d N=500 ... base_model.slim 
+	if (exists("slimgui")){
+		setwd("/home/vasili/ebc/projects/SLiM/Anc_contr_basal_model/msprime_burn-in");
+		defineConstant("N", 10e3); // population size
+		defineConstant("u", 1.25e-8); // mutation rate
+		defineConstant("r", 1e-8); // recombination rate
+		defineConstant("sd_beta", 0.1); // sd of the distribution where betas are drawn from (centered at 0)
+		defineConstant("h2", 0.8); // set heritability to calcualte environmental noise sd
+		defineConstant("w", INF); // omega - sd of the distibution of the fitnes function; INF results in neutrality
+		defineConstant("opt", 0); // trait optimum
+		defineConstant("l_chr", 20e3); // length of a single chromosome
+		defineConstant("n_chr", 10); // number of chromosomes in the genome
+		defineConstant("msprime_seed", 999); // msprime seed
+	}
+	defineConstant("input_from_msprime", paste0("neutralBI_Ne_", N, "_length_", n_chr, "x", l_chr, "_seed_", msprime_seed));
+	defineConstant("maf", 0.1); // maf threshold to select QTLs
+	defineConstant("output_cycle", 1000); // print intermediate stats every <output_cycle> generation
+	defineConstant("prefix", paste("N-" + N + "_l-" + l_chr + "_n-" + n_chr + "_w-" + w + "_sd_beta-" + sd_beta + "_h2-" + h2 + "_")); // print intermediate stats every <output_cycle> generation
+	defineConstant("output_stats", paste(prefix + "output_stats")); // name of an output files with stats
+	defineConstant("output_QTLs", paste(prefix + "output_QTLs")); // name of an output file with QTLs
+	defineConstant("output_burn_file", paste(prefix + "output_burn_file")); // name of the output file with all the simulation to pick up at a later stage
+	
+	initializeMutationRate(u);
+	
+	// mutation types
+	initializeMutationType("m1", 0.5, "f", 0.0);  // neut mutations
+	m1.mutationStackPolicy = "l";
+	
+	initializeMutationType("m2", 0.5, "n", 0.0, sd_beta);  // QTL -- selection coefficients are actually effect sizes.
+	m2.mutationStackPolicy = "f"; // subsequent mutations at a given position in a given chromosome will be effectively ignored
+	//m2.mutationStackPolicy = "l"; // stacking to "last" - more concordant with assumption of the infinite site mutation model
+	m2.convertToSubstitution = F; // maybe I'll use the approach of Yair and Coop - they convert fixed mutations to substitutions to save memory and include a step in the calculation of the phenotype to account for substitutions. But for now it stays this way.
+	
+	
+	// one genetic element type, the lenght is n_chr * l_chr
+	initializeGenomicElementType("g1", m1, 1.0);
+	initializeGenomicElement(g1, 0, n_chr*l_chr-1);
+	
+	// here I create a recombination map with recombination rate of <r> within the chromosome and 0.5 between chromosomes
+	rates = rep(c(r,0.5), n_chr);
+	rates = rates[0:(length(rates)-2)];
+	ends1 = seq(l_chr-1, n_chr*l_chr-1, by = l_chr);
+	ends2 = seq(l_chr, n_chr*l_chr, by = l_chr);
+	ends = sort(c(ends1, ends2));
+	ends = ends[0:(length(ends)-2)];
+	initializeRecombinationRate(rates, ends);
+}
+
+mutationEffect(m2) {
+	return 1.0;
+}
+
+1 early() {
+// save this run's identifier, used to save and restore
+defineConstant("simID", getSeed());
+}
+
+1 late() {
+	// reading in the output of msprime
+	catn("reading input from " + input_from_msprime);
+	sim.readFromPopulationFile(input_from_msprime);
+	// geting a list of all mutations
+	muts = sim.mutationsOfType(m1);
+	// obtaining allele frequencies
+	freqs = sim.mutationFrequencies(NULL, muts);
+	// filtering by maf
+	muts = muts[freqs >= maf & freqs <= 1-maf];
+	// filtering for position within the interquartile range of the chromosome. This can be narrowed down if needed
+	muts = muts[muts.position % l_chr > 0.25*l_chr & muts.position % l_chr < 0.75*l_chr];
+	// iterating over chromsome; finding all mutations (passing the filters above) on a given chromosome and picking 1 at random
+	for (chr in 0:(n_chr-1)){
+		qtls = muts[integerDiv(muts.position, l_chr) == chr];
+		if(length(qtls) > 0){
+			QTL = sample(qtls, 1);
+			target = p0.genomes[p0.genomes.containsMutations(QTL)]; // finding all genomes (haploid) carrying the picked mutation
+			target.addNewDrawnMutation(m2, QTL.position+1); // placing a mutation of type m2 next to the picked mutation
+			// I do this strange move to have all the QTL mutations as a separate type.
+			// Initially i tried to place ontop but it didn't overwrite it but stacked instead. So to avoid issues, for example when writing to a vcf, I decided to put them just to the next position
+		}
+	}
+	// header for the output file
+	line = paste("Generation", "GV", "PV", "pheno_sd", "h2", "h2_emp", sep = "\t");
+	writeFile(paste0(output_stats, "_seed", simID, ".tsv"), line, append=T);
+}
+
+
+
+// calculate fitness for each individual; it is faster do update fitness scaling than to have a fitness callback
+1: late(){
+	
+	
+	//	add2pheno = 2*sum(sim.substitutions.selectionCoeff); // substitutions that contributes to all phenotype values, factor of 2 for homozygous. This is from Yair and Coop; if you want to activate this, don't forget to switch m2.convertToSubstitution to T. The only difference between the two methods should be memory usage
+	
+	inds = p0.individuals;
+	genevalue = inds.sumOfMutationsOfType(m2); // obtaining the genetic value of each individual
+	GV = asString(mean(genevalue)); // storing the mean GV for printing
+	
+	// next we generate noise and add it to the phenotype
+	V_A = var(genevalue);
+	V_E = (V_A - h2 * V_A) / h2;
+	noise = rnorm(size(inds), 0, sqrt(V_E));
+	phenotypes = genevalue + noise;
+	
+	// storing the phenotype of each individual in its TagF. So far I don't plan to use it but just in case (modeling assortative mating or some other more advanced stuff).
+	//inds.tagF = phenotypes;
+	
+	PV = asString(mean(phenotypes)); // mean phenotype for printing
+	h2_emp = var(genevalue) / var(phenotypes); // calculating narrow sense heritability (which in this model is equal to H)
+	pheno_sd = sd(phenotypes); // recording standard deviation of the phenotype
+	
+	// calculating each individual's fitness using a Gaussian distribution with mean == opt and sd == w
+	inds.fitnessScaling = exp(-((opt - phenotypes)^2) / (2*(w^2))) ;
+	
+	
+	
+	// printing out some info every <output_cycle> generations
+	if (sim.cycle % output_cycle == 0){
+		catn("Generation " + sim.cycle + " finished\n writing output");
+		line = paste(sim.cycle, GV, PV, pheno_sd, h2, h2_emp, sep = "\t");
+		writeFile(paste0(output_stats, "_seed", simID, ".tsv"), line, append=T);
+		
+		
+		
+		// and also getting the position, allele frequency and beta of every QTL
+		m2muts = sim.mutationsOfType(m2);
+		m2muts = m2muts[order(m2muts.position)];
+		pos = m2muts.position;
+		betas = m2muts.selectionCoeff;
+		freqs = sim.mutationFrequencies(NULL, m2muts);
+		//	sim.outputMutations(m2muts);
+		
+		if(length(pos) > 0){
+			// this writes a table with generation, QTLs positions, freq and betas. The only problem is that I didn't find a way to avoid column names to be printed out every time so will have to clean those post-factum
+			gen = rep(sim.cycle, length(pos));
+			df = DataFrame("Generation", gen, "pos", pos, "freq", freqs, "betas", betas);
+			writeFile(paste0(output_QTLs, "_seed", simID, ".tsv"), df.serialize("tsv"), append=T);
+			//sim.outputFull();
+		}
+	
+	}
+
+}
+
+
+// this is just to keep it at hand if I will ever need it. So far I don't plan to simulate assortative mating
+//mateChoice() {
+//	phenotype = individual.tagF;
+//	others = sourceSubpop.individuals.tagF;
+//	return weights * dnorm(others, phenotype, 5.0);
+//}
+
+
+
+// output data at end of simulation -- needed to continue the simulation
+
+
+s1 5000 late() {
+	// save the state of the simulation
+	sim.outputFull(paste0(output_burn_file, "_seed", simID) ,binary=T);
+	
+	//	// output the substitution info to a file
+	//	if(!writeFile(output_sub_file, asString(2*sum(sim.substitutions.selectionCoeff)) )){stop("Error writing substitutions file.");}
+	//	
+	// writeFile(output_file, asString(2*sum(sim.substitutions.selectionCoeff)) );
+	// end simulation
+	sim.simulationFinished();
+}
+
+
+
+
+
+
