@@ -7,7 +7,8 @@ initialize() {
 		defineConstant("u", 1.25e-8); // mutation rate
 		defineConstant("r", 1e-8); // recombination rate
 		defineConstant("sd_beta", 0.1); // sd of the distribution where betas are drawn from (centered at 0)
-		defineConstant("h2", 0.8); // set heritability to calcualte environmental noise sd
+		//defineConstant("h2", 0.8); // set heritability to calcualte environmental noise sd !!! there are problems with starting from a target heritability because that forces environmental variance to adjust for the genotypic variance
+		defineConstant("V_E", 0.2); // set environmental variance (!!sd = sqrt(var)) to generate env noise
 		defineConstant("w", INF); // omega - sd of the distibution of the fitnes function; INF results in neutrality
 		defineConstant("opt", 0); // trait optimum
 		defineConstant("l_chr", 20e3); // length of a single chromosome
@@ -16,8 +17,8 @@ initialize() {
 	}
 	defineConstant("input_from_msprime", paste0("neutralBI_Ne_", N, "_length_", n_chr, "x", l_chr, "_seed_", msprime_seed));
 	defineConstant("maf", 0.1); // maf threshold to select QTLs
-	defineConstant("output_cycle", 1000); // print intermediate stats every <output_cycle> generation
-	defineConstant("prefix", paste("N-" + N + "_l-" + l_chr + "_n-" + n_chr + "_w-" + w + "_sd_beta-" + sd_beta + "_h2-" + h2 + "_")); // print intermediate stats every <output_cycle> generation
+	defineConstant("output_cycle", 100); // print intermediate stats every <output_cycle> generation
+	defineConstant("prefix", paste("N-" + N + "_l-" + l_chr + "_n-" + n_chr + "_w-" + w + "_sd_beta-" + sd_beta + "_VE-" + V_E + "_")); // print intermediate stats every <output_cycle> generation
 	defineConstant("output_stats", paste(prefix + "output_stats")); // name of an output files with stats
 	defineConstant("output_QTLs", paste(prefix + "output_QTLs")); // name of an output file with QTLs
 	defineConstant("output_burn_file", paste(prefix + "output_burn_file")); // name of the output file with all the simulation to pick up at a later stage
@@ -81,7 +82,7 @@ defineConstant("simID", getSeed());
 		}
 	}
 	// header for the output file
-	line = paste("Generation", "GV", "PV", "pheno_sd", "h2", "h2_emp", sep = "\t");
+	line = paste("Generation", "GV", "PV", "pheno_sd", "h2_emp", "V_A", sep = "\t");
 	writeFile(paste0(output_stats, "_seed", simID, ".tsv"), line, append=T);
 }
 
@@ -99,7 +100,7 @@ defineConstant("simID", getSeed());
 	
 	// next we generate noise and add it to the phenotype
 	V_A = var(genevalue);
-	V_E = (V_A - h2 * V_A) / h2;
+	// V_E = (V_A - h2 * V_A) / h2; // this is calculating V_E from observed genetic variance and heritability but this is problematic
 	noise = rnorm(size(inds), 0, sqrt(V_E));
 	phenotypes = genevalue + noise;
 	
@@ -116,9 +117,9 @@ defineConstant("simID", getSeed());
 	
 	
 	// printing out some info every <output_cycle> generations
-	if (sim.cycle % output_cycle == 0){
+	if (sim.cycle == 1 | sim.cycle % output_cycle == 0){
 		catn("Generation " + sim.cycle + " finished\n writing output");
-		line = paste(sim.cycle, GV, PV, pheno_sd, h2, h2_emp, sep = "\t");
+		line = paste(sim.cycle, GV, PV, pheno_sd, h2_emp, V_A, sep = "\t");
 		writeFile(paste0(output_stats, "_seed", simID, ".tsv"), line, append=T);
 		
 		
@@ -156,7 +157,7 @@ defineConstant("simID", getSeed());
 // output data at end of simulation -- needed to continue the simulation
 
 
-s1 5000 late() {
+s1 1000 late() {
 	// save the state of the simulation
 	sim.outputFull(paste0(output_burn_file, "_seed", simID) ,binary=T);
 	
