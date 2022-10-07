@@ -1,5 +1,5 @@
+
 initialize() {
-	
 	// setting parameters for running in slimgui which is comfy for setting up. Then one can run SLIM in CLI on a cluster by passing those parameters like this: slim -d u=1.25e-6 -d r=1e-8 -d N=500 ... base_model.slim 
 	if (exists("slimgui")){
 		setwd("/home/vasili/ebc/projects/SLiM/Anc_contr_basal_model/msprime_burn-in");
@@ -14,23 +14,25 @@ initialize() {
 		defineConstant("l_chr", 20e3); // length of a single chromosome
 		defineConstant("n_chr", 10); // number of chromosomes in the genome
 		defineConstant("msprime_seed", 999); // msprime seed
+		setSeed(55555);
 	}
+	defineConstant("simID", getSeed());
 	defineConstant("input_from_msprime", paste0("neutralBI_Ne_", N, "_length_", n_chr, "x", l_chr, "_seed_", msprime_seed));
 	defineConstant("maf", 0.1); // maf threshold to select QTLs
 	defineConstant("output_cycle", 100); // print intermediate stats every <output_cycle> generation
-	defineConstant("prefix", paste("N-" + N + "_l-" + l_chr + "_n-" + n_chr + "_w-" + w + "_sd_beta-" + sd_beta + "_VE-" + V_E + "_")); // print intermediate stats every <output_cycle> generation
-	defineConstant("output_stats", paste(prefix + "output_stats")); // name of an output files with stats
-	defineConstant("output_QTLs", paste(prefix + "output_QTLs")); // name of an output file with QTLs
-	defineConstant("output_burn_file", paste(prefix + "output_burn_file")); // name of the output file with all the simulation to pick up at a later stage
+	defineConstant("prefix", paste0("N-", N, "_l-", l_chr, "_n-", n_chr, "_w-", w, "_sd_beta-", sd_beta, "_VE-", V_E + "_SLiM_seed-", simID, "_SLiM.")); // print intermediate stats every <output_cycle> generation
+	defineConstant("output_stats", paste(prefix + "burn-in.stats")); // name of an output files with stats
+	defineConstant("output_QTLs", paste(prefix + "burn-in.QTLs")); // name of an output file with QTLs
+	defineConstant("output_burn_file", paste(prefix + "burn-in.sim")); // name of the output file with all the simulation to pick up at a later stage
 	
 	initializeMutationRate(u);
 	
 	// mutation types
 	initializeMutationType("m1", 0.5, "f", 0.0);  // neut mutations
-	m1.mutationStackPolicy = "l";
+	//m1.mutationStackPolicy = "l";
 	
 	initializeMutationType("m2", 0.5, "n", 0.0, sd_beta);  // QTL -- selection coefficients are actually effect sizes.
-	m2.mutationStackPolicy = "f"; // subsequent mutations at a given position in a given chromosome will be effectively ignored
+	//m2.mutationStackPolicy = "f"; // subsequent mutations at a given position in a given chromosome will be effectively ignored
 	//m2.mutationStackPolicy = "l"; // stacking to "last" - more concordant with assumption of the infinite site mutation model
 	m2.convertToSubstitution = F; // maybe I'll use the approach of Yair and Coop - they convert fixed mutations to substitutions to save memory and include a step in the calculation of the phenotype to account for substitutions. But for now it stays this way.
 	
@@ -53,11 +55,6 @@ mutationEffect(m2) {
 	return 1.0;
 }
 
-1 early() {
-// save this run's identifier, used to save and restore
-defineConstant("simID", getSeed());
-}
-
 1 late() {
 	// reading in the output of msprime
 	catn("reading input from " + input_from_msprime);
@@ -76,14 +73,15 @@ defineConstant("simID", getSeed());
 		if(length(qtls) > 0){
 			QTL = sample(qtls, 1);
 			target = p0.genomes[p0.genomes.containsMutations(QTL)]; // finding all genomes (haploid) carrying the picked mutation
-			target.addNewDrawnMutation(m2, QTL.position+1); // placing a mutation of type m2 next to the picked mutation
+			target.addNewDrawnMutation(m2, QTL.position); // placing a mutation of type m2 next to the picked mutation
 			// I do this strange move to have all the QTL mutations as a separate type.
 			// Initially i tried to place ontop but it didn't overwrite it but stacked instead. So to avoid issues, for example when writing to a vcf, I decided to put them just to the next position
+			// eventually I stack on top - vcf writning works fine
 		}
 	}
 	// header for the output file
 	line = paste("Generation", "GV", "PV", "pheno_sd", "h2_emp", "V_A", sep = "\t");
-	writeFile(paste0(output_stats, "_seed", simID, ".tsv"), line, append=T);
+	writeFile(paste0(output_stats, ".tsv"), line, append=T);
 }
 
 
@@ -120,7 +118,7 @@ defineConstant("simID", getSeed());
 	if (sim.cycle == 1 | sim.cycle % output_cycle == 0){
 		catn("Generation " + sim.cycle + " finished\n writing output");
 		line = paste(sim.cycle, GV, PV, pheno_sd, h2_emp, V_A, sep = "\t");
-		writeFile(paste0(output_stats, "_seed", simID, ".tsv"), line, append=T);
+		writeFile(paste0(output_stats, ".tsv"), line, append=T);
 		
 		
 		
@@ -136,7 +134,7 @@ defineConstant("simID", getSeed());
 			// this writes a table with generation, QTLs positions, freq and betas. The only problem is that I didn't find a way to avoid column names to be printed out every time so will have to clean those post-factum
 			gen = rep(sim.cycle, length(pos));
 			df = DataFrame("Generation", gen, "pos", pos, "freq", freqs, "betas", betas);
-			writeFile(paste0(output_QTLs, "_seed", simID, ".tsv"), df.serialize("tsv"), append=T);
+			writeFile(paste0(output_QTLs, ".tsv"), df.serialize("tsv"), append=T);
 			//sim.outputFull();
 		}
 	
@@ -157,9 +155,9 @@ defineConstant("simID", getSeed());
 // output data at end of simulation -- needed to continue the simulation
 
 
-s1 1000 late() {
+s1 999 late() {
 	// save the state of the simulation
-	sim.outputFull(paste0(output_burn_file, "_seed", simID) ,binary=T);
+	sim.outputFull(output_burn_file ,binary=T);
 	
 	//	// output the substitution info to a file
 	//	if(!writeFile(output_sub_file, asString(2*sum(sim.substitutions.selectionCoeff)) )){stop("Error writing substitutions file.");}
