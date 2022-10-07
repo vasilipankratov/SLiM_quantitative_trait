@@ -1,0 +1,360 @@
+
+// a user-defined function to sample <sampleSize> individuals from a specified subpopulaton <subPop>
+function (object<Individual>)sampleIndsFromPop(o<Subpopulation>$ subPop, i$ sampleSize)
+{
+sample = subPop.sampleIndividuals(sampleSize);
+sample = sample[order(sample.index)]; // this is a precaution to have the order of individuals the same between vcf and the stdoutput
+return sample;
+}
+
+initialize() {
+	// setting parameters for running in slimgui which is comfy for setting up. Then one can run SLIM in CLI on a cluster by passing those parameters like this: slim -d u=1.25e-6 -d r=1e-8 -d N=500 ... base_model.slim 
+	if (exists("slimgui")){
+		setwd("/home/vasili/ebc/projects/SLiM/Anc_contr_basal_model/msprime_burn-in");
+		defineConstant("N", 10e3); // population size
+		defineConstant("u", 1.25e-8); // mutation rate
+		defineConstant("r", 1e-8); // recombination rate
+		defineConstant("sd_beta", 0.1); // sd of the distribution where betas are drawn from (centered at 0)
+		//defineConstant("h2", 0.8); // set heritability to calcualte environmental noise sd !!! there are problems with starting from a target heritability because that forces environmental variance to adjust for the genotypic variance
+		defineConstant("V_E", 0.2); // set environmental variance (!!sd = sqrt(var)) to generate env noise
+		defineConstant("w", INF); // omega - sd of the distibution of the fitnes function; INF results in neutrality
+		defineConstant("opt", 0); // trait optimum
+		defineConstant("l_chr", 20e3); // length of a single chromosome
+		defineConstant("n_chr", 10); // number of chromosomes in the genome
+		defineConstant("burn_in_ID", 55555); // msprime seed
+		//setSeed(666666);
+	}
+	defineConstant("simID", getSeed());
+	defineConstant("maf", 0.1); // maf threshold to select QTLs
+	defineConstant("output_cycle", 200); // print intermediate stats every <output_cycle> generation
+	defineConstant("sample_size", 100); // how many individuals per population to sample
+	defineConstant("prefix", paste0("N-", N, "_l-", l_chr, "_n-", n_chr, "_w-", w, "_sd_beta-", sd_beta, "_VE-", V_E + "_SLiM_seed-", burn_in_ID, "_SLiM."));
+	defineConstant("input_from_SLiM_burnin", paste(prefix + "burn-in.sim"));
+	defineConstant("prefix_out", paste(prefix + "demography-" + simID));
+	defineConstant("output_stats", paste(prefix_out + ".stats")); // name of an output files with stats
+	defineConstant("output_QTLs", paste(prefix_out + ".QTLs")); // name of an output file with QTLs
+	defineConstant("output_sim_file", paste(prefix_out + ".sim")); // name of the output file with all the simulation to pick up at a later stage
+	
+	initializeMutationRate(u);
+	//	
+	// mutation types
+	initializeMutationType("m1", 0.5, "f", 0.0);  // neut mutations
+	m1.mutationStackPolicy = "l";
+	//	
+	initializeMutationType("m2", 0.5, "n", 0.0, sd_beta);  // QTL -- selection coefficients are actually effect sizes.
+	//m2.mutationStackPolicy = "f"; // subsequent mutations at a given position in a given chromosome will be effectively ignored
+	//m2.mutationStackPolicy = "l"; // stacking to "last" - more concordant with assumption of the infinite site mutation model
+	m2.convertToSubstitution = F; // maybe I'll use the approach of Yair and Coop - they convert fixed mutations to substitutions to save memory and include a step in the calculation of the phenotype to account for substitutions. But for now it stays this way.
+	
+	// we will use those 3 mutation types as marker mutations to mark local ancestry in the UKBB population. Note that SLiM automatically traces mutations' population of origin but this is not exactly what we need - a mutation might have originated in p0 and be present in all sources but we want to trace the ancestry of each given haplotype as coming from p3, p4 or p5
+	initializeMutationType("m3", 0.5, "f", 0.0); // marker mutation for p3 - Anatolia
+	initializeMutationType("m4", 0.5, "f", 0.0); // marker mutation for p4 - WHG
+	initializeMutationType("m5", 0.5, "f", 0.0); // marker mutation for p5 - Yamnaya
+	
+	
+	// one genetic element type, the lenght is n_chr * l_chr
+	initializeGenomicElementType("g1", m1, 1.0);
+	initializeGenomicElement(g1, 0, n_chr*l_chr-1);
+	
+	// here I create a recombination map with recombination rate of <r> within the chromosome and 0.5 between chromosomes
+	rates = rep(c(r,0.5), n_chr);
+	rates = rates[0:(length(rates)-2)];
+	ends1 = seq(l_chr-1, n_chr*l_chr-1, by = l_chr);
+	ends2 = seq(l_chr, n_chr*l_chr, by = l_chr);
+	ends = sort(c(ends1, ends2));
+	ends = ends[0:(length(ends)-2)];
+	initializeRecombinationRate(rates, ends);
+}
+
+// Turning off direct fitness effects for all mutations with a selection coefficient. Instead selcoef serve as trait betas. Note that we will duplicate betas from m2 (actual QTLs) to marker mutations. This is only to simplify calculating partial ancestry-specific PGS - the only mutations that will actually effect phenotype (and fitness in models with selection) are m2.
+mutationEffect(m2) {
+	return 1.0;
+}
+
+mutationEffect(m3) {
+	return 1.0;
+}
+mutationEffect(m4) {
+	return 1.0;
+}
+mutationEffect(m5) {
+	return 1.0;
+}
+
+
+1 late() {
+	// reading in the output of msprime
+	catn("reading input from " + input_from_SLiM_burnin);
+	sim.readFromPopulationFile(input_from_SLiM_burnin);
+	// make it generation 1
+	community.tick = 1;
+	sim.cycle = 1;
+	
+	// header for the output file
+	line = paste("Generation", "pop_index", "Ne", "GV", "PV", "pheno_sd", "h2_emp", "V_A", sep = "\t");
+	writeFile(paste0(output_stats, ".tsv"), line, append=T);
+}
+
+
+
+// calculate fitness for each individual; it is faster do update fitness scaling than to have a fitness callback
+1: late(){
+	
+	
+	//	add2pheno = 2*sum(sim.substitutions.selectionCoeff); // substitutions that contributes to all phenotype values, factor of 2 for homozygous. This is from Yair and Coop; if you want to activate this, don't forget to switch m2.convertToSubstitution to T. The only difference between the two methods should be memory usage
+	for (pop in sim.subpopulations){
+		
+		inds = pop.individuals;
+		pop_id = pop.id;
+		// i = which(sim.subpopulations == pop);
+		genevalue = inds.sumOfMutationsOfType(m2); // obtaining the genetic value of each individual
+		GV = asString(mean(genevalue)); // storing the mean GV for printing
+		
+		// next we generate noise and add it to the phenotype
+		V_A = var(genevalue);
+		// V_E = (V_A - h2 * V_A) / h2; // this is calculating V_E from observed genetic variance and heritability but this is problematic
+		noise = rnorm(size(inds), 0, sqrt(V_E));
+		phenotypes = genevalue + noise;
+		
+		// storing the phenotype of each individual in its TagF. So far I don't plan to use it but just in case (modeling assortative mating or some other more advanced stuff).
+		//inds.tagF = phenotypes;
+		
+		PV = asString(mean(phenotypes)); // mean phenotype for printing
+		h2_emp = var(genevalue) / var(phenotypes); // calculating narrow sense heritability (which in this model is equal to H)
+		pheno_sd = sd(phenotypes); // recording standard deviation of the phenotype
+		
+		// calculating each individual's fitness using a Gaussian distribution with mean == opt and sd == w
+		inds.fitnessScaling = exp(-((opt - phenotypes)^2) / (2*(w^2))) ;
+		
+		
+		
+		// printing out some info every <output_cycle> generations
+		if (sim.cycle == 1 | sim.cycle % output_cycle == 0){
+			catn("Generation " + sim.cycle + " finished\n writing output");
+			Ne = length(pop.individuals);
+			line = paste(sim.cycle, pop_id, Ne, GV, PV, pheno_sd, h2_emp, V_A, sep = "\t");
+			writeFile(paste0(output_stats, ".tsv"), line, append=T);
+			
+			
+			
+			// and also getting the position, allele frequency and beta of every QTL
+			m2muts = sim.mutationsOfType(m2);
+			m2muts = m2muts[order(m2muts.position)];
+			pos = m2muts.position;
+			betas = m2muts.selectionCoeff;
+			freqs = sim.mutationFrequencies(pop, m2muts);
+			//	sim.outputMutations(m2muts);
+			
+			if(length(pos) > 0){
+				// this writes a table with generation, QTLs positions, freq and betas. The only problem is that I didn't find a way to avoid column names to be printed out every time so will have to clean those post-factum
+				gen = rep(sim.cycle, length(pos));
+				pop_index = rep(pop_id, length(pos));
+				df = DataFrame("Generation", gen, "pop", pop_index,  "pos", pos, "freq", freqs, "betas", betas);
+				writeFile(paste0(output_QTLs, ".tsv"), df.serialize("tsv"), append=T);
+				//sim.outputFull();
+			}
+		
+		}
+	}
+
+
+}
+
+
+// this is just to keep it at hand if I will ever need it. So far I don't plan to simulate assortative mating
+//mateChoice() {
+//	phenotype = individual.tagF;
+//	others = sourceSubpop.individuals.tagF;
+//	return weights * dnorm(others, phenotype, 5.0);
+//}
+
+
+
+/// # T1 split  p0-p1 45 Kya p0(East Asia) and p1(Europe)
+2 early() /* split p1 from p0 */ {
+	sim.addSubpopSplit("p1", 7000, p0);
+	p0.setSubpopulationSize(7000);
+}
+
+
+3:1500 early() /* exp growth of p0 - EAS*/ {
+	t = sim.cycle - 3;
+	p0_size = round(7000 * (1 + 0.00123)^t);
+	p0.setSubpopulationSize(asInteger(p0_size));
+}
+
+/// # T2 split  p1-p2  25.6 Kya - "Middle East - Caucasus" and "Europe"
+647 early() /* split p2 from p1 */ {
+	sim.addSubpopSplit("p2", 3500, p1);
+	p1.setSubpopulationSize(3500);
+}
+
+/// # T2-T4 growth of p1 and p2  17 Kya
+647:905 early() /* exp growth */ {
+	t = sim.cycle - 647;
+	p1_size = round(3500 * (1 + 0.0021)^t);
+	p2_size = round(3500 * (1 + 0.0021)^t);
+	p1.setSubpopulationSize(asInteger(p1_size));
+	p2.setSubpopulationSize(asInteger(p2_size));
+}
+
+/// # T4 split  p2-p4  17 Kya - "Europe" splits into WHG and and WHG
+905 early() /* split p4 (WHG) from p2  (EHG) */ {
+	sim.addSubpopSplit("p4", 3000, p2);
+	p2.setSubpopulationSize(3000);
+
+}
+
+/// # T5 migration from p0 (East Asia) to p2 (EHG) 16 Kya
+// I've changed the time here from 1025 to 967
+961 early() /* migration p2 from p0 */ {
+	p2.setMigrationRates(p0, 0.3);
+}
+
+961 late() /* stop the migration and kill p0 */ {
+	p2.setMigrationRates(p0, 0); // set migration rate to 0 - we want a single pulse admixture
+	//p0.setSubpopulationSize(0); // kill EAS just after they did their contribution to EHG
+}
+
+
+/// # T3 split  p1(CHG) -p3  (Anatolia_N) 14.2 Kya
+1025 early() /* split p3 from p1 */ {
+	sim.addSubpopSplit("p3", 2500, p1);
+	p1.setSubpopulationSize(3000);
+}
+
+
+/// # T6 merge  p1(CHG) + p2(EHG) = p5(Yamnaya)  14 Kya
+1033 early() /* merge p1 + p2 */ {
+	sim.addSubpop("p5", 5000);
+	p5.setMigrationRates(c(p1, p2), c(0.6, 0.4));
+}
+
+1033 late() /* stop p1 and p2 migrations to p5 */ {
+	p5.setMigrationRates(c(p1, p2), c(0, 0));
+	c(p1, p2).setSubpopulationSize(0); // kill CHG and EHG
+	//p2.setSubpopulationSize(0); // kill EHG
+}
+
+/// # creating sampled sister groups for p3 (Anatolia_N) and p4 (WHG) 
+1180 early() {
+sim.addSubpopSplit("p31", p3.individualCount, p3);
+sim.addSubpopSplit("p41", p4.individualCount, p4);
+}
+
+/// # labeling haplotypes from p3 (Anatolia_N) and p4 (WHG) just before their admixture
+1229 late() {
+	m2muts = sim.mutationsOfType(m2); // finding all existing m2 mutations
+	betas = sim.mutationsOfType(m2).selectionCoeff; // recording their betas
+	// iterating over the focal populations - p3 and p4 in this case - and corresponding marker mutations 
+	for (i in 0:1){
+		p = c(p3, p4)[i]; 
+		m = c(m3, m4)[i];
+		genomes = p.genomes;
+		// interating over all genomes in a population
+		for (g in genomes){
+			if(length(g.mutationsOfType(m2)) > 0){
+				m2muts_g = g.mutationsOfType(m2); 
+				g.addNewMutation(m, betas[match(m2muts, m2muts_g) >= 0], m2muts_g.position); // placing marker mutations on top of m2 mutations, like an "epigenetic" mark
+			}
+		}
+	}
+}
+
+/// # T7 merge p3(Anatolia_N) + p4 (WHG) = p6 (Early Farmers) 8 Kya
+1230 early() /* merge p3 + p4 */ {
+	sim.addSubpop("p6", 6000);
+	p6.setMigrationRates(c(p3, p4), c(0.78, 0.22));
+	sample_p31 = sampleIndsFromPop(p31, sample_size);
+	sample_p41 = sampleIndsFromPop(p41, sample_size);
+	sample = c(sample_p31, sample_p41);
+	sample.genomes.outputVCF(filePath=paste0(prefix_out + "_p31+p41.vcf"));
+}
+
+1230 late() /* stop p3 and p4 migration to p6 */ {
+	p6.setMigrationRates(c(p3, p4), c(0, 0));
+	c(p3, p31, p4, p41).setSubpopulationSize(0); // kill Anatolia_N and WHG
+}
+
+
+/// # creating sampled sister groups for p5 (Yamnaya) and p6 (Early Farmers) 
+1310 early() {
+sim.addSubpopSplit("p51", p5.individualCount, p5);
+sim.addSubpopSplit("p61", p6.individualCount, p6);
+}
+
+/// # labeling haplotypes from p5 (Yamnaya) before their admixture
+1359 late() {
+	m2muts = sim.mutationsOfType(m2); // finding all existing m2 mutations
+	betas = sim.mutationsOfType(m2).selectionCoeff; // recording their betas
+	// iterating over the focal populations - p3 and p4 in this case - and corresponding marker mutations 
+		p = p5; 
+		m = m5;
+		genomes = p.genomes;
+		// interating over all genomes in a population
+		for (g in genomes){
+			if(length(g.mutationsOfType(m2)) > 0){
+				m2muts_g = g.mutationsOfType(m2); 
+				g.addNewMutation(m, betas[match(m2muts, m2muts_g) >= 0], m2muts_g.position); // placing marker mutations on top of m2 mutations, like an "epigenetic" mark
+			}
+		}
+}
+
+
+/// # T8 merge p5(Yamnaya) + p6 (Early Farmers) = p7 (UKBB) 4.2 Kya
+// I've changed the time here from 1230 to 1360
+1360 early() /* merge p5 + p6 */ {
+	sim.addSubpop("p7", 6000);
+	p7.setMigrationRates(c(p5, p6), c(0.46, 0.54));
+	sample_p51 = sampleIndsFromPop(p51, sample_size);
+	sample_p61 = sampleIndsFromPop(p61, sample_size);
+	sample = c(sample_p51, sample_p61);
+	sample.genomes.outputVCF(filePath=paste0(prefix_out + "_p51+p61.vcf"));
+}
+
+1360 late() /* stop p5 and p6 migration to p7*/ {
+	p7.setMigrationRates(c(p5, p6), c(0, 0));
+	c(p5, p51, p6, p61).setSubpopulationSize(0); // kill Yamnaya and Early Farmers
+}
+
+/// #growth  p7 17 Kya - maybe generations and not Kya?
+1483:1500 early() /* exp growth */ {
+	t = sim.cycle - 1483;
+	p7_size = round(6000.1046957333444 * (1 + 0.11)^t);
+	p7.setSubpopulationSize(asInteger(p7_size));
+}
+
+
+1500 late() {
+
+sample_p0 = sampleIndsFromPop(p0, sample_size);
+sample_p7 = sampleIndsFromPop(p7, sample_size);
+sample = c(sample_p0, sample_p7);
+
+df_asPGS = DataFrame();
+for (mut in c(m2, m3, m4, m5)){
+		asPRS = sample.sumOfMutationsOfType(mut);
+		mut_name = paste0("m", asString(mut.id));
+		tmp = DataFrame(mut_name, asPRS);
+		df_asPGS.cbind(tmp);
+	}
+
+
+writeFile(paste0(prefix_out, ".asPGS.tsv"), df_asPGS.serialize("tsv"));
+sample.genomes.outputVCF(filePath=paste0(prefix_out + "_p0+p7.vcf"));
+	// save the state of the simulation
+	//sim.outputFull(output_sim_file, binary=T);
+	
+	//	// output the substitution info to a file
+	//	if(!writeFile(output_sub_file, asString(2*sum(sim.substitutions.selectionCoeff)) )){stop("Error writing substitutions file.");}
+	//	
+	// writeFile(output_file, asString(2*sum(sim.substitutions.selectionCoeff)) );
+	// end simulation
+	sim.simulationFinished();
+}
+
+
+
+
+
+

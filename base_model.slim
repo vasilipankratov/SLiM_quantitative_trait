@@ -27,11 +27,11 @@ initialize() {
 	
 	// mutation types
 	initializeMutationType("m1", 0.5, "f", 0.0);  // neut mutations
-	m1.mutationStackPolicy = "f";
+	m1.mutationStackPolicy = "l";
 	
 	initializeMutationType("m2", 0.5, "n", 0.0, sd_beta);  // QTL -- selection coefficients are actually effect sizes.
-	m2.mutationStackPolicy = "f"; // subsequent mutations at a given position in a given chromosome will be effectively ignored
-	// m2.mutationStackPolicy = "l";
+	// m2.mutationStackPolicy = "f"; // subsequent mutations at a given position in a given chromosome will be effectively ignored
+	m2.mutationStackPolicy = "l"; // stacking to "last" - more concordant with assumption of the infinite site mutation model
 	m2.convertToSubstitution = F; // maybe I'll use the approach of Yair and Coop - they convert fixed mutations to substitutions to save memory and include a step in the calculation of the phenotype to account for substitutions. But for now it stays this way.
 	
 	
