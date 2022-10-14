@@ -83,9 +83,9 @@ function (void)outputQTLfreq(o<Subpopulation>$ subPop)
 
 /// # outputVCFsample
 // a function to output a vcf containing <N> samples from a given <subpop>
-function (void)outputVCFsample(o<Subpopulation>$ subPop, i$ N)
+function (void)outputVCFsample(o<Subpopulation>$ subPop, i$ n)
 {
-	sample = sampleIndsFromPop(subPop, N);
+	sample = sampleIndsFromPop(subPop, n);
 	pop_id = subPop.id;
 	sample.genomes.outputVCF(filePath=paste0(prefix_out + "_p" + pop_id + ".vcf"));
 }
@@ -94,7 +94,10 @@ function (void)outputVCFsample(o<Subpopulation>$ subPop, i$ N)
 
 initialize()
 {
-	// setting parameters for running in slimgui which is comfy for setting up. Then one can run SLIM in CLI on a cluster by passing those parameters like this: slim -d u=1.25e-6 -d r=1e-8 -d N=500 ... base_model.slim 
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// setting parameters for running in slimgui which is comfy for setting up. Then one can run SLIM in CLI on a cluster by passing those parameters like this: slim -d u=1.25e-6 -d r=1e-8 -d N=500 ... base_model.slim 
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	if (exists("slimgui"))
 	{
 		setwd("/home/vasili/ebc/projects/SLiM/Anc_contr_basal_model/msprime_burn-in");
@@ -102,7 +105,6 @@ initialize()
 		defineConstant("u", 1.25e-8); // mutation rate
 		defineConstant("r", 1e-8); // recombination rate
 		defineConstant("sd_beta", 0.1); // sd of the distribution where betas are drawn from (centered at 0)
-		
 		//defineConstant("h2", 0.8); // set heritability to calcualte environmental noise sd !!! there are problems with starting from a target heritability because that forces environmental variance to adjust for the genotypic variance
 		defineConstant("V_E", 0.2); // set environmental variance (!!sd = sqrt(var)) to generate env noise
 		defineConstant("w", INF); // omega - sd of the distibution of the fitnes function; INF results in neutrality
@@ -110,11 +112,14 @@ initialize()
 		defineConstant("l_chr", 20e3); // length of a single chromosome
 		defineConstant("n_chr", 10); // number of chromosomes in the genome
 		defineConstant("burn_in_ID", 55555); // msprime seed
-		
 		//setSeed(666666);
 	}
-	
-	// defining various time points
+
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////	
+// defining various time points
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	defineConstant("p0_growth_start", 3); // start of p0 (East Asia) growth
 	defineConstant("p0_migration", 961); // end of p0 (East Asia) growth, its migration to p2 (EHG) and extinction of p0
 	defineConstant("p1_p2_split", 647); // split between p1 ("Middle East - Caucasus") and p2 ("Europe"). This is also the time when they  start growing
@@ -126,19 +131,57 @@ initialize()
 	defineConstant("p7_growth_start", 1483); // p7 starts growing
 	defineConstant("sim_end", 1500); // end of the simulation
 	
-	// setting maf threshold for picking QTLs
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// defining effective population sizes
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	defineConstant("Ne_p0_initial", 7000); // Ne of p0 (East Asia) right after split
+	defineConstant("Ne_p1_initial", 7000); // Ne of p1 (West Eurasia) right after split from p0
+	defineConstant("Ne_p1_s2", 3500); // Ne of p1 (Middle East/Caucasus) right after split of p2
+	defineConstant("Ne_p2_s2", 3500); // Ne of p2 (Europe) right after split from p1
+	defineConstant("Ne_p2_s4", 3000); // Ne of p2 (EHG) right after split of p4 (WHG)
+	defineConstant("Ne_p4_s4", 3000); // Ne of p4 (WHG) right after split of p2 (EHG)
+	defineConstant("Ne_p3_s7", 2500); // Ne of p3 (Anatolian Neolithic) right after split from p1 (Middle East/Caucasus)
+	defineConstant("Ne_p1_s7", 3000); // Ne of p1 (CHG) right after split of p3 (Anatolian)
+	defineConstant("Ne_p5_s8", 5000); // Ne of p5 (Yamnaya)
+	defineConstant("Ne_p6_s12", 6000); // Ne of p5 (Early European Farmers)
+	defineConstant("Ne_p7_s16", 6000); // Ne of p5 (UK)
+
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// defining migration rates
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	defineConstant("p0_to_p2", 0.3); // single pulse migration rate from p0 to p2
+	defineConstant("p1_to_p5", 0.6); // fraction of p1 (CHG) in p5 (Yamnaya). The fraction of p2 (EHG) is defined as 1 - p1_to_p5
+	defineConstant("p3_to_p6", 0.78); // fraction of p3 (Anatolia) in p6 (Early Farmers). The fraction of p4 (WHG) is defined as 1 - p1_to_p5
+	defineConstant("p5_to_p7", 0.46); // fraction of p5 (Yamnaya) in p7 (UK). The fraction of p6 (Early Farmers) is defined as 1 - p1_to_p5
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// setting maf threshold for picking QTLs
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	defineConstant("maf", 0.1); // maf threshold to select QTLs
-	
-	// using the random seed value as the simulation ID
-	defineConstant("simID", getSeed());
-	
+
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// output parameters
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 	// a vector of generations when to sample stats
 	defineConstant("output_cycles", c(1, 500, 750, seq(1000, 1500, 100))); // print intermediate stats every <output_cycle> generation
-	
 	// how many individuals per population to sample	
 	defineConstant("sample_size", 100);
-	
-	// creating file prefices
+	// how many individuals per population to sample	
+	defineConstant("sample_size_UK", 10000);
+	// using the random seed value as the simulation ID
+	defineConstant("simID", getSeed());
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////	
+// creating file prefices
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	defineConstant("prefix", paste0("N-", N, "_l-", l_chr, "_n-", n_chr, "_opt-", opt, "_w-", w, "_sd_beta-", sd_beta, "_VE-", V_E + "_SLiM_seed-", burn_in_ID, "_SLiM."));
 	defineConstant("input_from_SLiM_burnin", paste(prefix + "burn-in.sim"));
 	defineConstant("prefix_out", paste(prefix + "demography-" + simID));
@@ -211,6 +254,7 @@ mutationEffect(m5)
 //p6 - Early European farmers (p3 + p4)
 //p7 - UK (p5 + p6)
 // here I re-schedule the execution of nearly all code blocks. The constants for the start and end of each block are defined above and if needed can be moved to the part executed only in slimgui so that they can be defined in the command line call. Note that despite rescheduling the each code block should have some timing defined which will be overriden by rescheduling.
+
 1 early()
 {
 	community.rescheduleScriptBlock(s1, start=p0_growth_start, end=p0_migration); // p0 growth
@@ -284,30 +328,30 @@ mutationEffect(m5)
 /// # T1 split  p0-p1 45 Kya p0(East Asia) and p1(Europe)
 2 early() /* split p1 from p0 */
 {
-	sim.addSubpopSplit("p1", 7000, p0);
-	p0.setSubpopulationSize(7000);
+	sim.addSubpopSplit("p1", Ne_p1_initial, p0);
+	p0.setSubpopulationSize(Ne_p0_initial);
 }
 
 s1 3:961 early() /* exp growth of p0 - EAS*/
 {
-	t = sim.cycle - 3;
-	p0_size = round(7000 * (1 + 0.00123)^t);
+	t = sim.cycle - p0_growth_start;
+	p0_size = round(Ne_p0_initial * (1 + 0.00123)^t);
 	p0.setSubpopulationSize(asInteger(p0_size));
 }
 
 /// # T2 split  p1-p2  25.6 Kya - "Middle East - Caucasus" and "Europe"
 s2 647 early() /* split p2 from p1 */
 {
-	sim.addSubpopSplit("p2", 3500, p1);
-	p1.setSubpopulationSize(3500);
+	sim.addSubpopSplit("p2", Ne_p2_s2, p1);
+	p1.setSubpopulationSize(Ne_p1_s2);
 }
 
 /// # T2-T4 growth of p1 and p2  17 Kya
 s3 647:905 early() /* exp growth */
 {
-	t = sim.cycle - 647;
-	p1_size = round(3500 * (1 + 0.0021)^t);
-	p2_size = round(3500 * (1 + 0.0021)^t);
+	t = sim.cycle - p1_p2_split;
+	p1_size = round(Ne_p1_s2 * (1 + 0.0021)^t);
+	p2_size = round(Ne_p2_s2 * (1 + 0.0021)^t);
 	p1.setSubpopulationSize(asInteger(p1_size));
 	p2.setSubpopulationSize(asInteger(p2_size));
 }
@@ -315,15 +359,15 @@ s3 647:905 early() /* exp growth */
 /// # T4 split  p2-p4  17 Kya - "Europe" splits into WHG and and WHG
 s4 905 early() /* split p4 (WHG) from p2  (EHG) */
 {
-	sim.addSubpopSplit("p4", 3000, p2);
-	p2.setSubpopulationSize(3000);
+	sim.addSubpopSplit("p4", Ne_p4_s4, p2);
+	p2.setSubpopulationSize(Ne_p2_s4);
 }
 
 /// # T5 migration from p0 (East Asia) to p2 (EHG) 16 Kya
 // I've changed the time here from 1025 to 967
 s5 961 early() /* migration p2 from p0 */
 {
-	p2.setMigrationRates(p0, 0.3);
+	p2.setMigrationRates(p0, p0_to_p2);
 }
 
 s6 961 late() /* stop the migration and kill p0 */
@@ -335,15 +379,15 @@ s6 961 late() /* stop the migration and kill p0 */
 /// # T3 split  p1(CHG) - p3  (Anatolia_N) 14.2 Kya
 s7 1025 early() /* split p3 from p1 */
 {
-	sim.addSubpopSplit("p3", 2500, p1);
-	p1.setSubpopulationSize(3000);
+	sim.addSubpopSplit("p3", Ne_p3_s7, p1);
+	p1.setSubpopulationSize(Ne_p1_s7);
 }
 
 /// # T6 merge  p1(CHG) + p2(EHG) = p5(Yamnaya)  14 Kya
 s8 1033 early() /* merge p1 + p2 */
 {
-	sim.addSubpop("p5", 5000);
-	p5.setMigrationRates(c(p1, p2), c(0.6, 0.4));
+	sim.addSubpop("p5", Ne_p5_s8);
+	p5.setMigrationRates(c(p1, p2), c(p1_to_p5, 1 - p1_to_p5));
 }
 
 s9 1033 late() /* stop p1 and p2 migrations to p5 */
@@ -369,8 +413,8 @@ s11 1229 late()
 /// # T7 merge p3(Anatolia_N) + p4 (WHG) = p6 (Early Farmers) 8 Kya
 s12 1230 early() /* merge p3 + p4 */
 {
-	sim.addSubpop("p6", 6000);
-	p6.setMigrationRates(c(p3, p4), c(0.78, 0.22));
+	sim.addSubpop("p6", Ne_p6_s12);
+	p6.setMigrationRates(c(p3, p4), c(p3_to_p6, 1 - p3_to_p6));
 	outputVCFsample(p31, sample_size);
 	outputVCFsample(p41, sample_size);
 }
@@ -398,8 +442,8 @@ s15 1359 late()
 // I've changed the time here from 1230 to 1360
 s16 1360 early() /* merge p5 + p6 */
 {
-	sim.addSubpop("p7", 6000);
-	p7.setMigrationRates(c(p5, p6), c(0.46, 0.54));
+	sim.addSubpop("p7", Ne_p7_s16);
+	p7.setMigrationRates(c(p5, p6), c(p5_to_p7, 1 - p5_to_p7));
 	outputVCFsample(p51, sample_size);
 }
 
@@ -413,7 +457,7 @@ s17 1360 late() /* stop p5 and p6 migration to p7*/
 s18 1483:1500 early() /* exp growth */
 {
 	t = sim.cycle - p7_growth_start;
-	p7_size = round(6000 * (1 + 0.11)^t);
+	p7_size = round(Ne_p7_s16 * (1 + 0.11)^t);
 	p7.setSubpopulationSize(asInteger(p7_size));
 }
 
@@ -421,7 +465,7 @@ s19 1500 late()
 {
 	//outputVCFsample(p0, sample_size); // if we need to sample p0 - East Asia
 	
-	sample = sampleIndsFromPop(p7, 10000);
+	sample = sampleIndsFromPop(p7, sample_size_UK);
 	df_asPGS = DataFrame();
 	for (mut in c(m2, m3, m4, m5))
 	{
