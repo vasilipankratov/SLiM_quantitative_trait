@@ -9,6 +9,7 @@ The msprime part requires the following python libraries: msprime, sys, pyslim, 
 
 ## vcf files for Massimo
 The file m1_p0+p7+p31+p41+p51+p61.vcf.gz contains genotypes for individuals from 6 populations:
+
 p0 - East Asia
 
 p7 - UKBB
