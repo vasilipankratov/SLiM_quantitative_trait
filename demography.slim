@@ -182,7 +182,7 @@ initialize()
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////	
 // creating file prefices
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-	defineConstant("prefix", paste0("N-", N, "_l-", l_chr, "_n-", n_chr, "_opt-", opt, "_w-", w, "_sd_beta-", sd_beta, "_VE-", V_E + "_SLiM_seed-", burn_in_ID, "_SLiM."));
+	defineConstant("prefix", paste0("N-", N, "_l-", l_chr, "_n-", n_chr, "_opt-", opt, "_w-", w, "_sd_beta-", sd_beta, "_VE-", V_E + "_SLiM_burnin_seed-", burn_in_ID, "_SLiM."));
 	defineConstant("input_from_SLiM_burnin", paste(prefix + "burn-in.sim"));
 	defineConstant("prefix_out", paste(prefix + "demography-" + simID));
 	defineConstant("output_stats", paste(prefix_out + ".stats")); // name of an output files with stats
@@ -475,7 +475,7 @@ s19 1500 late()
 		df_asPGS.cbind(tmp);
 	}
 	writeFile(paste0(prefix_out, ".asPGS.tsv"), df_asPGS.serialize("tsv"));
-	sample.genomes.outputVCF(filePath=paste0(prefix_out + "p7.vcf"));
+	sample.genomes.outputVCF(filePath=paste0(prefix_out + "_p7.vcf"));
 	sim.simulationFinished();
 }
 
