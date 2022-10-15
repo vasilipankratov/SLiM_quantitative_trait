@@ -43,16 +43,16 @@ SLiM_demo_seed=1234567891011
 ##################################################################
 
 
-START=$(date +%s)
+#START=$(date +%s)
 
-slim -s $SLiM_burnin_seed -d N=$Ne -d u=1.25e-8 -d r=1e-8 -d sd_beta=$sd_beta -d V_E=$V_E -d w=$w -d opt=$opt -d l_chr=$l_chr -d n_chr=$n_chr -d msprime_seed=$msprime_seed read_msprime_run_burnin.slim 
+#slim -s $SLiM_burnin_seed -d N=$Ne -d u=1.25e-8 -d r=1e-8 -d sd_beta=$sd_beta -d V_E=$V_E -d w=$w -d opt=$opt -d l_chr=$l_chr -d n_chr=$n_chr -d msprime_seed=$msprime_seed read_msprime_run_burnin.slim 
 
-END=$(date +%s)
+#END=$(date +%s)
 
-RUNTIME=$(echo "$END - $START" | bc -l)
+#RUNTIME=$(echo "$END - $START" | bc -l)
 
-echo "SLiM run finished"
-printf "%10s %5d\n %10s %5d\n %15s %5d\n" "N of chromosomes: " $n_chr "Pop size: " $Ne "Run time (in sec): " $RUNTIME
+#echo "SLiM run finished"
+#printf "%10s %5d\n %10s %5d\n %15s %5d\n" "N of chromosomes: " $n_chr "Pop size: " $Ne "Run time (in sec): " $RUNTIME
 
 
 ##################################################################
@@ -88,14 +88,18 @@ for pop in p31 p41 p51 p7
 do
 bgzip ${file}_${pop}.vcf
 dir=demography_output/run-${SLiM_demo_seed}
-mkdir $dir
+mkdir -p $dir
 mv ${file}_${pop}.vcf.gz ${dir}/
-cd $dir
-bcftools query -l ${file}_${pop}.vcf.gz | sed 's/_//g' | awk -F'\t' -v pop=$pop 'BEGIN {OFS = FS} {print $1, pop $1}' > samples_${pop}.txt
-bcftools reheader -s samples_${pop}.txt ${file}_${pop}.vcf.gz | bcftools view -Oz -i 'MT=1' -o m1_${file}_${pop}.vcf.gz
-tabix -p vcf m1_${file}_${pop}.vcf.gz
+bcftools query -l ${dir}/${file}_${pop}.vcf.gz | sed 's/_//g' | awk -F'\t' -v pop=$pop 'BEGIN {OFS = FS} {print $1, pop "_" $1}' > ${dir}/samples_${pop}.txt
+bcftools reheader -s ${dir}/samples_${pop}.txt ${dir}/${file}_${pop}.vcf.gz | bcftools view -Oz -i 'MT=1' -o ${dir}/m1_${file}_${pop}.vcf.gz
+tabix -p vcf ${dir}/m1_${file}_${pop}.vcf.gz
 done
 
-bcftools merge -Oz --missing-to-ref -o ${file}_all.vcf.gz m1_{p31,p41,p51,p7}.vcf.gz
+bcftools merge -Oz --missing-to-ref -o ${dir}/${file}_all.vcf.gz ${dir}/m1_${file}_{p31,p41,p51,p7}.vcf.gz
 
+tabix -p vcf ${dir}/${file}_all.vcf.gz
 
+rm ${dir}/m1_${file}_{p31,p41,p51,p7}.vcf.gz*
+
+mv ${dir}/${file}_{p31,p41,p51,p7}.vcf.gz* ${dir}/vcf_backup
+mv ${dir}/samples_{p31,p41,p51,p7}.txt ${dir}/vcf_backup
