@@ -96,8 +96,11 @@ initialize()
 {
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// setting parameters for running in slimgui which is comfy for setting up. Then one can run SLIM in CLI on a cluster by passing those parameters like this: slim -d u=1.25e-6 -d r=1e-8 -d N=500 ... base_model.slim 
+// Defining core parameters (Ne, genetic architecture etc)
+// This part is only executed in SLiMgui. When running in CLI on a cluster one should pass those parameters like this: slim -d u=1.25e-8 -d r=1e-8 -d N=10000 ... demography.slim 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
 	if (exists("slimgui"))
 	{
 		setwd("/home/vasili/ebc/projects/SLiM/Anc_contr_basal_model/msprime_burn-in");
@@ -157,6 +160,16 @@ initialize()
 	defineConstant("p1_to_p5", 0.6); // fraction of p1 (CHG) in p5 (Yamnaya). The fraction of p2 (EHG) is defined as 1 - p1_to_p5
 	defineConstant("p3_to_p6", 0.78); // fraction of p3 (Anatolia) in p6 (Early Farmers). The fraction of p4 (WHG) is defined as 1 - p1_to_p5
 	defineConstant("p5_to_p7", 0.46); // fraction of p5 (Yamnaya) in p7 (UK). The fraction of p6 (Early Farmers) is defined as 1 - p1_to_p5
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// defining growth rates
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	defineConstant("gr_p0", 0.00123); // growth of p0 (Asia) starting right after the split from west Eurasia
+	defineConstant("gr_p1", 0.0021); // growth of p1 (Middle East / Caucasus) starting after the split between p1 and p2 
+	defineConstant("gr_p2", 0.0021); // growth of p2 (Europe) starting after the split between p1 and p2
+	defineConstant("gr_p7", 0.259); // growth of p7 (UK) starting 17gen ~ 500 years ago. Results in ~ 300K individuals at present
+
 
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -335,7 +348,7 @@ mutationEffect(m5)
 s1 3:961 early() /* exp growth of p0 - EAS*/
 {
 	t = sim.cycle - p0_growth_start;
-	p0_size = round(Ne_p0_initial * (1 + 0.00123)^t);
+	p0_size = round(Ne_p0_initial * (1 + gr_p0)^t);
 	p0.setSubpopulationSize(asInteger(p0_size));
 }
 
@@ -350,8 +363,8 @@ s2 647 early() /* split p2 from p1 */
 s3 647:905 early() /* exp growth */
 {
 	t = sim.cycle - p1_p2_split;
-	p1_size = round(Ne_p1_s2 * (1 + 0.0021)^t);
-	p2_size = round(Ne_p2_s2 * (1 + 0.0021)^t);
+	p1_size = round(Ne_p1_s2 * (1 + gr_p1)^t);
+	p2_size = round(Ne_p2_s2 * (1 + gr_p2)^t);
 	p1.setSubpopulationSize(asInteger(p1_size));
 	p2.setSubpopulationSize(asInteger(p2_size));
 }
@@ -457,7 +470,7 @@ s17 1360 late() /* stop p5 and p6 migration to p7*/
 s18 1483:1500 early() /* exp growth */
 {
 	t = sim.cycle - p7_growth_start;
-	p7_size = round(Ne_p7_s16 * (1 + 0.11)^t);
+	p7_size = round(Ne_p7_s16 * (1 + gr_p7)^t);
 	p7.setSubpopulationSize(asInteger(p7_size));
 }
 
