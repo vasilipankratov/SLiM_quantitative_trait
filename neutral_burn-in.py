@@ -1,6 +1,11 @@
 #!/usr/bin/python
 import msprime, sys, pyslim, tskit, argparse
 
+# currently I run it like
+# python3 neutral_burn-in.py 10000 20000 5 999
+# passing the script, Ne, chromosome length, number of chromosome and the random seed
+# I'll perhaps us
+
 parser = argparse.ArgumentParser(description="")
 parser.add_argument('-N', '--Ne', type=int, help='effective pop size', required=True)
 parser.add_argument('-n', '--nchr', type=int, help='number of chromosomes to simulate', required=True)
@@ -21,7 +26,7 @@ print("random seed = " + str(seed))
 mu=1.25e-8 # mutation rate per bp
 
 #output file name
-outfile = "neutralBI_Ne_" + str(Ne) + "_length_" + str(n) + "x" + str(l) + "_seed_" + str(seed)
+outfile = "mpprime_burn-in_Ne_" + str(Ne) + "_length_" + str(n) + "x" + str(l) + "_seed_" + str(seed)
 
 #creating a vector of breaks for the recombination map 
 # for a 20kb chromosome it is 0, 19999, 20000, 39999, 40000, ...
