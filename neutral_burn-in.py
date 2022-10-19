@@ -26,7 +26,7 @@ print("random seed = " + str(seed))
 mu=1.25e-8 # mutation rate per bp
 
 #output file name
-outfile = "mpprime_burn-in_Ne_" + str(Ne) + "_length_" + str(n) + "x" + str(l) + "_seed_" + str(seed)
+outfile = "msprime_burn-in_Ne_" + str(Ne) + "_length_" + str(n) + "x" + str(l) + "_seed_" + str(seed)
 
 #creating a vector of breaks for the recombination map 
 # for a 20kb chromosome it is 0, 19999, 20000, 39999, 40000, ...
