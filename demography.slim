@@ -1,3 +1,7 @@
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// defining funcitons
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 /// # sampleIndsFromPop
 // a function to sample <sampleSize> individuals from a specified subpopulaton <subPop>
 function (object<Individual>)sampleIndsFromPop(o<Subpopulation>$ subPop, i$ sampleSize)
@@ -92,6 +96,11 @@ function (void)outputVCFsample(o<Subpopulation>$ subPop, i$ n)
 
 
 
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// initiating simulation parameters
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 initialize()
 {
 
@@ -99,7 +108,6 @@ initialize()
 // Defining core parameters (Ne, genetic architecture etc)
 // This part is only executed in SLiMgui. When running in CLI on a cluster one should pass those parameters like this: slim -d u=1.25e-8 -d r=1e-8 -d N=10000 ... demography.slim 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
 
 	if (exists("slimgui"))
 	{
@@ -114,7 +122,7 @@ initialize()
 		defineConstant("opt", 0.0); // trait optimum
 		defineConstant("l_chr", 20e3); // length of a single chromosome
 		defineConstant("n_chr", 10); // number of chromosomes in the genome
-		defineConstant("burn_in_ID", 55555); // msprime seed
+		defineConstant("burn_in_ID", 7777777); // msprime seed
 		//setSeed(666666);
 	}
 

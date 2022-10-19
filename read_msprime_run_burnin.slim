@@ -53,6 +53,8 @@ function (void)outputQTLfreq(o<Subpopulation>$ subPop)
 }
 
 
+
+
 initialize() {
 	// setting parameters for running in slimgui which is comfy for setting up. Then one can run SLIM in CLI on a cluster by passing those parameters like this: slim -d u=1.25e-6 -d r=1e-8 -d N=500 ... base_model.slim 
 	if (exists("slimgui")){
@@ -71,20 +73,40 @@ initialize() {
 		setSeed(7777777);
 	}
 	
-	defineConstant("sim_end", 999); // end of the simulation
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// define simulation duration
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	defineConstant("sim_end", 999); // generation when the simulation ends. I did some test runs and looks like 999 generations are enought for the additive genetic variance to equlibrate under stabilizing selection with w = 3
 	
-	defineConstant("simID", getSeed());
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// msprime output to be read
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	defineConstant("input_from_msprime", paste0("neutralBI_Ne_", N, "_length_", n_chr, "x", l_chr, "_seed_", msprime_seed));
+	
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// criteria to pick QTLs
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	defineConstant("maf", 0.1); // maf threshold to select QTLs
+	defineConstant("left_lim", 0.25); // the left limit (in fraction of the total length) of the position of the QTL on the chromosome
+	defineConstant("right_lim", 0.75); // the left limit (in fraction of the total length) of the position of the QTL on the chromosome
+
 	
-	// a vector of generations when to sample stats
-	defineConstant("output_cycles", c(1, seq(100, 900, 100))); // print intermediate stats every <output_cycle> generation
-	
-	defineConstant("prefix", paste0("N-", N, "_l-", l_chr, "_n-", n_chr, "_opt-", opt, "_w-", w, "_sd_beta-", sd_beta, "_VE-", V_E + "_SLiM_seed-", simID, "_SLiM.")); // print intermediate stats every <output_cycle> generation
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// output details
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	defineConstant("simID", getSeed());
+	defineConstant("output_cycles", c(1, seq(100, 900, 100))); // a vector of generations when to sample stats
+	defineConstant("prefix", paste0("N-", N, "_l-", l_chr, "_n-", n_chr, "_opt-", opt, "_w-", w, "_sd_beta-", sd_beta, "_VE-", V_E + "_SLiM_burnin_seed-", simID, "_SLiM.")); // print intermediate stats every <output_cycle> generation
 	defineConstant("output_stats", paste(prefix + "burn-in.stats")); // name of an output files with stats
 	defineConstant("output_QTLs", paste(prefix + "burn-in.QTLs")); // name of an output file with QTLs
 	defineConstant("output_burn_file", paste(prefix + "burn-in.sim")); // name of the output file with all the simulation to pick up at a later stage
 	
+
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// genomic properties
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	initializeMutationRate(u);
 	
 	// mutation types
@@ -110,17 +132,26 @@ initialize() {
 	initializeRecombinationRate(rates, ends);
 }
 
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// removing the direct effect of m2 on fitness
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
 mutationEffect(m2) {
 	return 1.0;
 }
 
 
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // scheduling the end of the simulation
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
 1 early() {
 	community.rescheduleScriptBlock(s1, start=sim_end, end=sim_end); // simulation ends
 }
 
 
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// picking QTLs, assigning betas, initiate files to write stats etc.
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
 1 late() {
 	// reading in the output of msprime
 	catn("reading input from " + input_from_msprime);
@@ -132,7 +163,7 @@ mutationEffect(m2) {
 	// filtering by maf
 	muts = muts[freqs >= maf & freqs <= 1-maf];
 	// filtering for position within the interquartile range of the chromosome. This can be narrowed down if needed
-	muts = muts[muts.position % l_chr > 0.25*l_chr & muts.position % l_chr < 0.75*l_chr];
+	muts = muts[muts.position % l_chr > left_lim * l_chr & muts.position % l_chr < right_lim * l_chr];
 	// iterating over chromsome; finding all mutations (passing the filters above) on a given chromosome and picking 1 at random
 	for (chr in 0:(n_chr-1)){
 		qtls = muts[integerDiv(muts.position, l_chr) == chr];
@@ -141,7 +172,6 @@ mutationEffect(m2) {
 			target = p0.genomes[p0.genomes.containsMutations(QTL)]; // finding all genomes (haploid) carrying the picked mutation
 			target.addNewDrawnMutation(m2, QTL.position); // placing a mutation of type m2 next to the picked mutation
 			// I do this strange move to have all the QTL mutations as a separate type.
-			// Initially i tried to place ontop but it didn't overwrite it but stacked instead. So to avoid issues, for example when writing to a vcf, I decided to put them just to the next position
 			// eventually I stack on top - vcf writning works fine
 		}
 	}
@@ -166,7 +196,10 @@ mutationEffect(m2) {
 	writeFile(paste0(output_stats, ".tsv"), line, append=T);
 }
 
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // calculate fitness for each individual; it is faster do update fitness scaling than to have a fitness callback
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
 1: late(){
 	
 	// calcualte the trait for each individual in the subpopulation and re-scales fitness
@@ -181,6 +214,9 @@ mutationEffect(m2) {
 }
 
 
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// finish the simulation
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
 s1 999 late() {
 	// save the state of the simulation
 	sim.outputFull(output_burn_file , binary=T);
