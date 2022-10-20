@@ -141,6 +141,8 @@ initialize()
 	defineConstant("p5_p6_merge", 1360); // merge of p3 (Anatolia) and p4 (WHG) = origin of Early European farmer. p3 and p4 go extinct and are sampled
 	defineConstant("p7_growth_start", 1483); // p7 starts growing
 	defineConstant("sim_end", 1500); // end of the simulation
+	defineConstant("sample_source_split", 50); // we model a sister group for every admixing population and this sister group is actually sampled at the same time as the admixture happens. This parameter sets the depth of the split between the admixture source and its sampled sister population 
+
 	
 
 
@@ -197,15 +199,23 @@ initialize()
 	defineConstant("sample_size", 100);
 	// how many individuals per population to sample	
 	defineConstant("sample_size_UK", 10000);
-	// using the random seed value as the simulation ID
-	defineConstant("simID", getSeed());
+
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////	
 // creating file prefices
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	
+	// using the random seed value as the simulation ID
+	defineConstant("simID", getSeed());
+
+	defineConstant("output_dir", paste0("demography_output/run-", simID, "/"));
+
 	defineConstant("prefix", paste0("N-", N, "_l-", l_chr, "_n-", n_chr, "_opt-", opt, "_w-", w, "_sd_beta-", sd_beta, "_VE-", V_E + "_SLiM_burnin_seed-", burn_in_ID, "_SLiM."));
+
 	defineConstant("input_from_SLiM_burnin", paste(prefix + "burn-in.sim"));
-	defineConstant("prefix_out", paste(prefix + "demography-" + simID));
+
+	defineConstant("prefix_out", paste(output_dir + prefix + "demography-" + simID));
+	defineConstant("output_param", paste(prefix_out + ".param")); // name of an output files with simulation parameters
 	defineConstant("output_stats", paste(prefix_out + ".stats")); // name of an output files with stats
 	defineConstant("output_QTLs", paste(prefix_out + ".QTLs")); // name of an output file with QTLs
 	defineConstant("output_sim_file", paste(prefix_out + ".sim")); // name of the output file with all the simulation to pick up at a later stage
@@ -287,11 +297,11 @@ mutationEffect(m5)
 	community.rescheduleScriptBlock(s7, start=p1_p3_split, end=p1_p3_split); // p1-p3 split
 	community.rescheduleScriptBlock(s8, start=p1_p2_merge, end=p1_p2_merge); // p1-p2 merge - origin of Yamnaya
 	community.rescheduleScriptBlock(s9, start=p1_p2_merge, end=p1_p2_merge); // p1-p2 extinction
-	community.rescheduleScriptBlock(s10, start=p3_p4_merge - 50, end=p3_p4_merge - 50); // sampled groups p31/p41 split from corresponding source groups p3/p4 that participate in admixture. 50 generations before admixture
+	community.rescheduleScriptBlock(s10, start=p3_p4_merge - sample_source_split, end=p3_p4_merge - sample_source_split); // sampled groups p31/p41 split from corresponding source groups p3/p4 that participate in admixture. 50 generations before admixture
 	community.rescheduleScriptBlock(s11, start=p3_p4_merge - 1, end=p3_p4_merge - 1); // labeling local ancestry in p3 and p4 1 generation before admixture
 	community.rescheduleScriptBlock(s12, start=p3_p4_merge, end=p3_p4_merge); // p3-p4 merge - origin of Early Farmers
 	community.rescheduleScriptBlock(s13, start=p3_p4_merge, end=p3_p4_merge); // extinction of p3 (Anatolia) and p2 (WHG)
-	community.rescheduleScriptBlock(s14, start=p5_p6_merge - 50, end=p5_p6_merge - 50); // sampled groups p51/p61 split from corresponding source groups p5/p6 that participate in admixture. 50 generations before admixture
+	community.rescheduleScriptBlock(s14, start=p5_p6_merge - sample_source_split, end=p5_p6_merge - sample_source_split); // sampled groups p51/p61 split from corresponding source groups p5/p6 that participate in admixture. 50 generations before admixture
 	community.rescheduleScriptBlock(s15, start=p5_p6_merge - 1, end=p5_p6_merge - 1); // labeling local ancestry in p5 and p6 1 generation before admixture
 	community.rescheduleScriptBlock(s16, start=p5_p6_merge, end=p5_p6_merge); // p5-p6 merge - origin of UK
 	community.rescheduleScriptBlock(s17, start=p5_p6_merge, end=p5_p6_merge); // extinction of p6 (Early Farmers) and p5 (Yamnaya)
@@ -299,8 +309,14 @@ mutationEffect(m5)
 	community.rescheduleScriptBlock(s19, start=sim_end, end=sim_end); // simulation ends
 }
 
+
+
 1 late()
 {
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////	
+// reading input and recording m2 mutations (QTLs)
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	// reading in the output of msprime
 	catn("reading input from " + input_from_SLiM_burnin);
 	sim.readFromPopulationFile(input_from_SLiM_burnin);
@@ -315,7 +331,155 @@ mutationEffect(m5)
 	defineConstant("m2muts", m2muts_tmp);
 	defineConstant("betas", m2muts.selectionCoeff); // recording their betas
 	defineConstant("pos", m2muts.position); // and positions
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////	
+// preparing output files
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	
+	// write a file with simulation parameters
+	createDirectory(output_dir);
+	param_vector = c(
+"SLiM_demography_seed",
+"SLiM_burn-in_seed",
+
+"initial_Ne",
+"mutation_rate", 
+"recombination_rate",
+"chromosome_length",
+"number_of_chromosomes",
+
+"QTL_maf_threshold",
+"beta_sd", 
+"environmental_variance", 
+"trait_optimum",
+"fitness_function_sd", 
+
+"time_p0_growth_start_s1", 
+"time_p0_to_p2_migration_s5", 
+"time_p1_p2_split_s2", 
+"time_p2_p4_split_s4", 
+"time_p1_p3_split_s7", 
+"time_p1_p2_merge_s8", 
+"time_p3_p4_merge_s12", 
+"time_p5_p6_merge_s16", 
+"time_p7_growth_start_s18", 
+"time_simulation_end_s19", 
+"split_depth_between_source_and_sample",
+
+"Ne_p0_initial",
+"Ne_p1_initial",
+"Ne_p1_s2",
+"Ne_p2_s2",
+"Ne_p2_s4",
+"Ne_p4_s4",
+"Ne_p1_s7",
+"Ne_p3_s7",
+"Ne_p5_s8",
+"Ne_p6_s12",
+"Ne_p7_s16",
+
+"migration_p0_to_p2",
+"migration_p1_to_p5",
+"migration_p3_to_p6",
+"migration_p5_to_p7",
+
+"growth_rate_gr_p0",
+"growth_rate_gr_p1",
+"growth_rate_gr_p2",
+"growth_rate_gr_p7",
+
+"sample_size_of_ancient_pops",
+"sample_size_UK",
+
+"p0",
+"p1",
+"p2",
+"p3",
+"p4",
+"p5",
+"p6",
+"p7",
+"m1",
+"m2",
+"m3",
+"m4",
+"m5"
+
+);
+	value_vector = c(
+simID,
+burn_in_ID,
+
+N, 
+u, 
+r, 
+l_chr,
+n_chr,
+
+maf,
+sd_beta, 
+V_E, 
+opt,
+w, 
+
+p0_growth_start,
+p0_migration,
+p1_p2_split,
+p2_p4_split, 
+p1_p3_split, 
+p1_p2_merge, 
+p3_p4_merge,
+p5_p6_merge, 
+p7_growth_start, 
+sim_end,
+sample_source_split,
+
+Ne_p0_initial,
+Ne_p1_initial,
+Ne_p1_s2,
+Ne_p2_s2,
+Ne_p2_s4,
+Ne_p4_s4,
+Ne_p1_s7,
+Ne_p3_s7,
+Ne_p5_s8,
+Ne_p6_s12,
+Ne_p7_s16,
+
+p0_to_p2,
+p1_to_p5,
+p3_to_p6,
+p5_to_p7,
+
+gr_p0,
+gr_p1,
+gr_p2,
+gr_p7,
+
+sample_size,
+sample_size_UK,
+
+"ancestral Eurasian => East Asian",
+"West Eurasia => Middle East/Caucasus => CHG",
+"Europe => EHG",
+"Anatolian Neolithic",
+"WHG",
+"Yamnaya (p1 + p2)",
+"Early European farmers (p3 + p4)",
+"UK (p5 + p6)",
+"neutral_mutations",
+"QTLs",
+"markers_of_Anatolia_LA",
+"markers_of_WHG_LA",
+"markers_of_Yamnaya_LA"
+);
+
+
+
+	df = DataFrame("parameters", param_vector, "values", value_vector);
+	writeFile(paste0(output_param, ".list.tsv"), df.serialize("tsv"));
+
 	// write a file with QTL positions and betas
 	df = DataFrame("QTL", ("QTL" + seq(1, length(pos))), "pos", pos, "betas", betas);
 	writeFile(paste0(output_QTLs, ".list.tsv"), df.serialize("tsv"));
@@ -328,6 +492,8 @@ mutationEffect(m5)
 	line = paste("Generation", "pop_index", "Ne", "mean_geno", "var_add", "mean_pheno", "var_pheno", "h2", sep="\t");
 	writeFile(paste0(output_stats, ".tsv"), line, append=T);
 }
+
+
 
 // calculate fitness for each individual; it is faster do update fitness scaling than to have a fitness callback
 1: late()
@@ -397,7 +563,7 @@ s6 961 late() /* stop the migration and kill p0 */
 	p0.setSubpopulationSize(0); // kill EAS just after they did their contribution to EHG
 }
 
-/// # T3 split  p1(CHG) - p3  (Anatolia_N) 14.2 Kya
+/// # T3 split  p1 (CHG) - p3  (Anatolia_N) 14.2 Kya
 s7 1025 early() /* split p3 from p1 */
 {
 	sim.addSubpopSplit("p3", Ne_p3_s7, p1);
