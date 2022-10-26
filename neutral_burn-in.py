@@ -26,7 +26,7 @@ print("random seed = " + str(seed))
 mu=1.25e-8 # mutation rate per bp
 
 #output file name
-outfile = "msprime_burn-in_Ne_" + str(Ne) + "_length_" + str(n) + "x" + str(l) + "_seed_" + str(seed)
+outfile = "msprime_burn-in_Ne_" + str(Ne) + "_length_" + str(n) + "x" + str(l) + "_seed_" + str(seed) + ".sim"
 
 #creating a vector of breaks for the recombination map 
 # for a 20kb chromosome it is 0, 19999, 20000, 39999, 40000, ...
@@ -58,6 +58,7 @@ ts = msprime.sim_ancestry(
         recombination_rate=recomb_map,
         model = "dtwf")
 
+print("simulation finished")
 # annotating the obtained tree sequence with SLiM metadata
 mutated = pyslim.annotate(ts, model_type="WF", tick=1, stage="late")
 
@@ -67,7 +68,9 @@ mutated = msprime.sim_mutations(mutated, rate = mu, random_seed = seed,
 # simplifying the tree
 mutated.simplify()
 
+print("tree modification for SLiM finished")
+
 # writing output
 mutated.dump(outfile)
 
-
+print("output file created")

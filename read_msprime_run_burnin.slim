@@ -1,6 +1,6 @@
 /// # calculateQuantitativeTrait
 // a function to scale individuals' fitness based on their quantitative trait
-function (float)calculateQuantitativeTrait(o<Subpopulation>$ subPop, f$ env_var, f$ optimum, f$ w_sd)
+function (float)calculateQuantitativeTrait(o<Subpopulation>$ subPop, numeric$ env_var, numeric$ optimum, numeric$ w_sd)
 {
 	// part 1calcualte the trait for each individual in the subpopulation and re-scales fitness
 	inds = subPop.individuals;
@@ -81,7 +81,7 @@ initialize() {
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // msprime output to be read
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
-	defineConstant("input_from_msprime", paste0("msprime_burn-in_Ne_", N, "_length_", n_chr, "x", l_chr, "_seed_", msprime_seed));
+	defineConstant("input_from_msprime", paste0("msprime_burn-in_Ne_", N, "_length_", n_chr, "x", l_chr, "_seed_", msprime_seed, ".sim"));
 	
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////

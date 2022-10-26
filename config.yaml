@@ -1,0 +1,13 @@
+initial_Ne: 14000
+n_chr: 100
+len_chr: 20000
+mu: 1.25e-8
+rec: 1e-8
+msprime_seed: 1162971105
+trait_opt: 0.0
+sd_beta: 0.1
+env_var: 0.9
+
+
+
+
