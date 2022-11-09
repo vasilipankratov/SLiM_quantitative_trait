@@ -1,0 +1,5 @@
+setup	w	slim_burnin_seed	slim_demography_seed	deviating_pop	opt_of_dev_pop	opt_of_UK	fitness_w_dev_pop	fitness_w_UK
+1	INF	3912939459551	916627179070	-1	0	0	INF	INF
+2	3	9090981991029	211124564521	5	2	0	3	3
+3	3	9090981991029	9604257715399	-1	0	0	3	3
+7	3	9090981991029	635690074414	5	10	0	3	INF

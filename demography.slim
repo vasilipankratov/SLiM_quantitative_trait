@@ -54,9 +54,12 @@ function (float)calculateQuantitativeTrait(o<Subpopulation>$ subPop, numeric$ en
 	var_pheno = var(phenotypes); // recording variance of the phenotype
 	h2 = var_add / var_pheno; // calculating narrow sense heritability (which in this model is equal to H)
 	
+	freqs = sim.mutationFrequencies(subPop, m2muts);
+	QTL_count = sum(freqs > 0 & freqs < 1);
+	
 	// storing the phenotype of each individual in its TagF. So far I don't plan to use it but just in case (modeling assortative mating or some other more advanced stuff).
 	//inds.tagF = phenotypes;
-	sumstat = c(pop_id, Ne, mean_GV, var_add, mean_PV, var_pheno, h2);
+	sumstat = c(pop_id, Ne, mean_GV, var_add, mean_PV, var_pheno, h2, QTL_count);
 	return (sumstat);
 }
 
@@ -131,6 +134,7 @@ initialize()
 		defineConstant("n_chr", 10); // number of chromosomes in the genome
 		defineConstant("burn_in_ID", 7777777); // msprime seed
 		//setSeed(666666);
+		defineConstant("setup", 1);
 	}
 	
 	
@@ -165,8 +169,8 @@ initialize()
 	defineConstant("Ne_p3_s7", 2500); // Ne of p3 (Anatolian Neolithic) right after split from p1 (Middle East/Caucasus)
 	defineConstant("Ne_p1_s7", 3000); // Ne of p1 (CHG) right after split of p3 (Anatolian)
 	defineConstant("Ne_p5_s8", 5000); // Ne of p5 (Yamnaya)
-	defineConstant("Ne_p6_s12", 6000); // Ne of p5 (Early European Farmers)
-	defineConstant("Ne_p7_s16", 6000); // Ne of p5 (UK)
+	defineConstant("Ne_p6_s12", 6000); // Ne of p6 (Early European Farmers)
+	defineConstant("Ne_p7_s16", 6000); // Ne of p7 (UK)
 	
 	
 	
@@ -185,7 +189,7 @@ initialize()
 	defineConstant("gr_p0", 0.00123); // growth of p0 (Asia) starting right after the split from west Eurasia
 	defineConstant("gr_p1", 0.0021); // growth of p1 (Middle East / Caucasus) starting after the split between p1 and p2 
 	defineConstant("gr_p2", 0.0021); // growth of p2 (Europe) starting after the split between p1 and p2
-	defineConstant("gr_p7", 0.259); // growth of p7 (UK) starting 17gen ~ 500 years ago. Results in ~ 300K individuals at present
+	defineConstant("gr_p7", 0.18); // growth of p7 (UK) starting 17gen ~ 500 years ago. Results in ~ 300K individuals at present
 	
 	
 	
@@ -201,7 +205,7 @@ initialize()
 	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	
 	// a vector of generations when to sample stats
-	defineConstant("output_cycles", c(1, 500, 750, seq(1000, 1500, 100))); // print intermediate stats every <output_cycle> generation
+	defineConstant("output_cycles", unique(c(1, 500, 750, seq(1000, 1100, 100), seq(1100, 1500, 20)))); // print intermediate stats every <output_cycle> generation
 	// how many individuals per population to sample	
 	defineConstant("sample_size", 100);
 	// how many individuals per population to sample	
@@ -347,6 +351,7 @@ mutationEffect(m5)
 	// write a file with simulation parameters
 	// createDirectory(output_dir); // I commented this step because snakemake already creates the needed directory
 	param_vector = c(
+		"setup",
 		"SLiM_demography_seed",
 		"SLiM_burn-in_seed",
 		
@@ -420,6 +425,7 @@ mutationEffect(m5)
 		
 		);
 	value_vector = c(
+		setup,
 		simID,
 		burn_in_ID,
 		
@@ -506,7 +512,7 @@ mutationEffect(m5)
 	writeFile(paste0(output_QTLs, ".freq.tsv"), line, append=T);
 	
 	// header for the output file with sumstats
-	line = paste("Generation", "pop_index", "Ne", "mean_geno", "var_add", "mean_pheno", "var_pheno", "h2", sep="\t");
+	line = paste("Generation", "pop_index", "Ne", "mean_geno", "var_add", "mean_pheno", "var_pheno", "h2", "QTL_count", sep="\t");
 	writeFile(paste0(output_stats, ".tsv"), line, append=T);
 }
 
@@ -518,10 +524,12 @@ mutationEffect(m5)
 	for (pop in sim.subpopulations)
 	{
 		// setting the trait optimum to opt_shifted for the deviating population, opt_UK for the UK (p7) population and to opt elsewise
-		trait_optimum = (pop.id == deviating_pop ? opt_shifted else pop.id == 7 ? opt_UK else opt);
+		trait_optimum = ((pop.id == deviating_pop | pop.id == deviating_pop + "1") ? opt_shifted
+			else pop.id == 7 ? opt_UK else opt);
 		
 		// and the same for w (fitness peak width	)	
-		trait_w = (pop.id == deviating_pop ? w_shifted else pop.id == 7 ? w_UK else w);
+		trait_w = ((pop.id == deviating_pop | pop.id == deviating_pop + "1") ? w_shifted 
+			else pop.id == 7 ? w_UK else w);
 		// calcualte the trait for each individual in the subpopulation and re-scales fitness
 		sumstats = calculateQuantitativeTrait(pop, V_E, trait_optimum, trait_w);
 		
@@ -678,9 +686,15 @@ s19 1500 late()
 	df_asPGS = DataFrame();
 	for (mut in c(m2, m3, m4, m5))
 	{
+		// calculate ancestry specific PRS for a given ancestry
 		asPRS = sample.sumOfMutationsOfType(mut);
-		mut_name = paste0("m", asString(mut.id));
-		tmp = DataFrame(mut_name, asPRS);
+		PRS_m = paste0("PRS_m", asString(mut.id));
+		tmp = DataFrame(PRS_m, asPRS);
+		df_asPGS.cbind(tmp);
+		// calculate ancestry specific mutation count for a given ancestry
+		asMutCount = sample.countOfMutationsOfType(mut);
+		Count_m = paste0("Count_m", asString(mut.id));
+		tmp = DataFrame(Count_m, asMutCount);
 		df_asPGS.cbind(tmp);
 	}
 	writeFile(paste0(prefix_out, ".asPGS.tsv"), df_asPGS.serialize("tsv"));
