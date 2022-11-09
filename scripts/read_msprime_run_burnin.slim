@@ -1,0 +1,236 @@
+/// # calculateQuantitativeTrait
+// a function to scale individuals' fitness based on their quantitative trait
+function (float)calculateQuantitativeTrait(o<Subpopulation>$ subPop, numeric$ env_var, numeric$ optimum, numeric$ w_sd)
+{
+	// part 1calcualte the trait for each individual in the subpopulation and re-scales fitness
+	inds = subPop.individuals;
+	pop_id = subPop.id;
+	genevalue = inds.sumOfMutationsOfType(m2); // obtaining the genetic value of each individual
+	
+	// next we generate noise 
+	noise = rnorm(size(inds), 0, sqrt(env_var));
+	
+	// and add it to the phenotype
+	phenotypes = genevalue + noise;
+	
+	// calculating each individual's fitness using a Gaussian distribution with mean == opt and sd == w
+	inds.fitnessScaling = exp(-((optimum - phenotypes)^2) / (2 * (w_sd^2)));
+	
+	// part 2 calculate sum stats
+	Ne = subPop.individualCount;
+	mean_GV = mean(genevalue); // storing the mean genetic value for printing
+	var_add = var(genevalue); // recording variance of the genetic value (additive genetic variance)
+	mean_PV = mean(phenotypes); // mean phenotype for printing
+	var_pheno = var(phenotypes); // recording variance of the phenotype
+	h2 = var_add / var_pheno; // calculating narrow sense heritability (which in this model is equal to H)
+
+	sumstat = c(pop_id, Ne, mean_GV, var_add, mean_PV, var_pheno, h2);
+	return (sumstat);
+}
+
+/// # outputTraitStats
+// a function to output basic summary stats
+function (void)outputTraitStats(f sumstats)
+{
+	catn("Generation " + sim.cycle + ": writing sumstats");
+	line = paste(sim.cycle, sumstats, sep="\t");
+	writeFile(paste0(output_stats, ".tsv"), line, append=T);
+}
+
+/// # outputQTLfreq
+// a function to output QTLs frequencies
+function (void)outputQTLfreq(o<Subpopulation>$ subPop)
+{
+	catn("Generation " + sim.cycle + ": writing QTL frequencies");
+	inds = subPop.individuals;
+	pop_id = subPop.id;
+	Ne = subPop.individualCount;
+	
+	// get allele frequency of every QTL
+	freqs = sim.mutationFrequencies(subPop, m2muts);
+	line = paste(sim.cycle, pop_id, Ne, freqs, sep="\t");
+	writeFile(paste0(output_QTLs, ".freq.tsv"), line, append=T);
+}
+
+
+
+
+initialize() {
+	// setting parameters for running in slimgui which is comfy for setting up. Then one can run SLIM in CLI on a cluster by passing those parameters like this: slim -d u=1.25e-6 -d r=1e-8 -d N=500 ... base_model.slim 
+	if (exists("slimgui")){
+		setwd("/home/vasili/ebc/projects/SLiM/Anc_contr_basal_model/msprime_burn-in");
+		defineConstant("N", 10e3); // population size
+		defineConstant("u", 1.25e-8); // mutation rate
+		defineConstant("r", 1e-8); // recombination rate
+		defineConstant("sd_beta", 0.1); // sd of the distribution where betas are drawn from (centered at 0)
+		//defineConstant("h2", 0.8); // set heritability to calcualte environmental noise sd !!! there are problems with starting from a target heritability because that forces environmental variance to adjust for the genotypic variance
+		defineConstant("V_E", 0.2); // set environmental variance (!!sd = sqrt(var)) to generate env noise
+		defineConstant("w", INF); // omega - sd of the distibution of the fitnes function; INF results in neutrality
+		defineConstant("opt", 0.0); // trait optimum
+		defineConstant("l_chr", 20e3); // length of a single chromosome
+		defineConstant("n_chr", 10); // number of chromosomes in the genome
+		defineConstant("msprime_seed", 999); // msprime seed
+		setSeed(7777777);
+	}
+	
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// define simulation duration
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	defineConstant("sim_end", 999); // generation when the simulation ends. I did some test runs and looks like 999 generations are enought for the additive genetic variance to equlibrate under stabilizing selection with w = 3
+	
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// msprime output to be read
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	defineConstant("input_from_msprime", paste0("msprime_burn-in_Ne_", N, "_length_", n_chr, "x", l_chr, "_seed_", msprime_seed, ".sim"));
+	
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// criteria to pick QTLs
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	defineConstant("maf", 0.1); // maf threshold to select QTLs
+	defineConstant("left_lim", 0.25); // the left limit (in fraction of the total length) of the position of the QTL on the chromosome
+	defineConstant("right_lim", 0.75); // the left limit (in fraction of the total length) of the position of the QTL on the chromosome
+
+	
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// output details
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	defineConstant("simID", getSeed());
+	defineConstant("output_cycles", c(1, seq(100, 900, 100))); // a vector of generations when to sample stats
+	defineConstant("prefix", paste0("N-", N, "_l-", l_chr, "_n-", n_chr, "_opt-", opt, "_w-", w, "_sd_beta-", sd_beta, "_VE-", V_E + "_SLiM_burnin_seed-", simID, "_SLiM.")); // print intermediate stats every <output_cycle> generation
+	defineConstant("output_stats", paste(prefix + "burn-in.stats")); // name of an output files with stats
+	defineConstant("output_QTLs", paste(prefix + "burn-in.QTLs")); // name of an output file with QTLs
+	defineConstant("output_burn_file", paste(prefix + "burn-in.sim")); // name of the output file with all the simulation to pick up at a later stage
+	
+
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// genomic properties
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	initializeMutationRate(u);
+	
+	// mutation types
+	initializeMutationType("m1", 0.5, "f", 0.0);  // neut mutations
+	m1.mutationStackPolicy = "l";
+	
+	initializeMutationType("m2", 0.5, "n", 0.0, sd_beta);  // QTL -- selection coefficients are actually effect sizes.
+	m2.convertToSubstitution = F; // maybe I'll use the approach of Yair and Coop - they convert fixed mutations to substitutions to save memory and include a step in the calculation of the phenotype to account for substitutions. But for now it stays this way.
+	//m2.mutationStackPolicy = "f"; // subsequent mutations at a given position in a given chromosome will be effectively ignored
+	//m2.mutationStackPolicy = "l"; // stacking to "last" - more concordant with assumption of the infinite site mutation model	
+	
+	// one genetic element type, the lenght is n_chr * l_chr
+	initializeGenomicElementType("g1", m1, 1.0);
+	initializeGenomicElement(g1, 0, n_chr*l_chr-1);
+	
+	// here I create a recombination map with recombination rate of <r> within the chromosome and 0.5 between chromosomes
+	rates = rep(c(r,0.5), n_chr);
+	rates = rates[0:(length(rates)-2)];
+	ends1 = seq(l_chr-1, n_chr*l_chr-1, by = l_chr);
+	ends2 = seq(l_chr, n_chr*l_chr, by = l_chr);
+	ends = sort(c(ends1, ends2));
+	ends = ends[0:(length(ends)-2)];
+	initializeRecombinationRate(rates, ends);
+}
+
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// removing the direct effect of m2 on fitness
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+mutationEffect(m2) {
+	return 1.0;
+}
+
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// scheduling the end of the simulation
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+1 early() {
+	community.rescheduleScriptBlock(s1, start=sim_end, end=sim_end); // simulation ends
+}
+
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// picking QTLs, assigning betas, initiate files to write stats etc.
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+1 late() {
+	// reading in the output of msprime
+	catn("reading input from " + input_from_msprime);
+	sim.readFromPopulationFile(input_from_msprime);
+	// geting a list of all mutations
+	muts = sim.mutationsOfType(m1);
+	// obtaining allele frequencies
+	freqs = sim.mutationFrequencies(NULL, muts);
+	// filtering by maf
+	muts = muts[freqs >= maf & freqs <= 1-maf];
+	// filtering for position within the interquartile range of the chromosome. This can be narrowed down if needed
+	muts = muts[muts.position % l_chr > left_lim * l_chr & muts.position % l_chr < right_lim * l_chr];
+	// iterating over chromsome; finding all mutations (passing the filters above) on a given chromosome and picking 1 at random
+	for (chr in 0:(n_chr-1)){
+		qtls = muts[integerDiv(muts.position, l_chr) == chr];
+		if(length(qtls) > 0){
+			QTL = sample(qtls, 1);
+			target = p0.genomes[p0.genomes.containsMutations(QTL)]; // finding all genomes (haploid) carrying the picked mutation
+			target.addNewDrawnMutation(m2, QTL.position); // placing a mutation of type m2 next to the picked mutation
+			// I do this strange move to have all the QTL mutations as a separate type.
+			// eventually I stack on top - vcf writning works fine
+		}
+	}
+	
+	
+	m2muts_tmp = sim.mutationsOfType(m2); // finding all existing m2 mutations
+	m2muts_tmp = m2muts_tmp[order(m2muts_tmp.position)]; // order by position
+	defineConstant("m2muts", m2muts_tmp);
+	defineConstant("betas", m2muts.selectionCoeff); // recording their betas
+	defineConstant("pos", m2muts.position); // and positions
+	
+	// write a file with QTL positions and betas
+	df = DataFrame("QTL", ("QTL" + seq(1, length(pos))), "pos", pos, "betas", betas);
+	writeFile(paste0(output_QTLs, ".list.tsv"), df.serialize("tsv"));
+	
+	// header for the output file with QTL freqs
+	line = paste("Generation", "pop_index", "Ne", ("QTL" + seq(1, length(pos))), sep="\t");
+	writeFile(paste0(output_QTLs, ".freq.tsv"), line, append=T);
+	
+	// header for the output file with sumstats
+	line = paste("Generation", "pop_index", "Ne", "mean_geno", "var_add", "mean_pheno", "var_pheno", "h2", sep="\t");
+	writeFile(paste0(output_stats, ".tsv"), line, append=T);
+}
+
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// calculate fitness for each individual; it is faster do update fitness scaling than to have a fitness callback
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+1: late(){
+	
+	// calcualte the trait for each individual in the subpopulation and re-scales fitness
+	sumstats = calculateQuantitativeTrait(p0, V_E, opt, w);
+	
+	// printing out some info every <output_cycle> generations
+	if (match(sim.cycle, output_cycles) >= 0)
+	{
+		outputTraitStats(sumstats);
+		outputQTLfreq(p0);
+	}
+}
+
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// finish the simulation
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+s1 999 late() {
+	// save the state of the simulation
+	sim.outputFull(output_burn_file , binary=T);
+	sim.simulationFinished();
+}
+
+
+
+
+
+// this is just to keep it at hand if I will ever need it. So far I don't plan to simulate assortative mating
+//mateChoice() {
+//	phenotype = individual.tagF;
+//	others = sourceSubpop.individuals.tagF;
+//	return weights * dnorm(others, phenotype, 5.0);
+//}
+
