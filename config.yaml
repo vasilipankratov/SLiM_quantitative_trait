@@ -7,5 +7,5 @@ msprime_seed: 1162971104
 trait_opt: 0.0
 sd_beta: 0.1
 env_var: 0.9
-
+h2_cutoff: 0.00015
 

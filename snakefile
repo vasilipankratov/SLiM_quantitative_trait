@@ -95,16 +95,14 @@ output_files = [path + "{ext}" for path in output_files]
 
 # here one can specify the extension of the ultimate output; this should allow to easily extend the pipeline if needed
 # output_ext = [".no_rel.vcf.gz"]
-output_ext = expand(".{regions}" + ".{filetype}",
-        regions = ["filtered", "all_regions"],
+output_ext = expand(".h2_" + str(config["h2_cutoff"]) + ".{filetype}",
         filetype = ["asPGS+covma.csv", "pdf"])
 
 
 rule all:
     input:
-    	expand(output_files,
-        ext = output_ext
-        )
+        expand(output_files, 
+        ext = output_ext)
 
 # this rule runs msprime simulation job which provides neutral genetic diversity at mutation-drift equlibrium to pick QTLs 
 
@@ -116,8 +114,9 @@ rule run_msprime:
         time = 3*60
     shell:
         '''
+        wd=$(pwd)
         cd results/msprime_{wildcards.msprime_seed}
-        python3 ../../neutral_burn-in.py \
+        python3 ${wd}/scripts/neutral_burn-in.py \
         -N {wildcards.initial_Ne} \
         -l {wildcards.len_chr} \
         -n {wildcards.n_chr} \
@@ -132,6 +131,10 @@ burnin_prefix = "results/msprime_{msprime_seed}/SLiM_burnin_{slim_burnin_seed}/"
 demography_prefix = burnin_prefix + "demography_output/setup_{setup}_run-{slim_demography_seed}/"
 file_prefix = "N-{initial_Ne}_l-{len_chr}_n-{n_chr}_opt-{trait_opt}_w-{fitness_w}_sd_beta-{sd_beta}_VE-{env_var}_SLiM_burnin_seed-{slim_burnin_seed}_SLiM_setup_{setup}_seed-{slim_demography_seed}"
 master_prefix = demography_prefix + file_prefix
+
+
+demography_prefix_for_expand = demography_prefix.replace("{", "{{").replace("}", "}}" )
+file_prefix_for_expand = file_prefix.replace("{", "{{").replace("}", "}}" )
 
 
 # this is a SLiM burn-in step. When we introduce stabilizing selection acting on a trait it would be nice to reach equlibrium before simulating any demography. This is what this step does. Note that it is also kept in completely neutral setups for consistency.
@@ -151,6 +154,7 @@ rule run_SLiM_burnin:
         time = 5*60
     shell:
     	'''
+    	wd=$(pwd)
     	module load any/slim/4.0
     	cd {params.dir}
     	slim \
@@ -165,7 +169,7 @@ rule run_SLiM_burnin:
     	-d l_chr={wildcards.len_chr} \
     	-d n_chr={wildcards.n_chr} \
     	-d msprime_seed={wildcards.msprime_seed} \
-    	../../read_msprime_run_burnin.slim 
+    	${{wd}}/scripts/read_msprime_run_burnin.slim 
     	mv *SLiM_burnin_seed-{wildcards.slim_burnin_seed}_SLiM.burn-in* SLiM_burnin_{wildcards.slim_burnin_seed}/
     	'''
 
@@ -185,14 +189,16 @@ rule run_SLiM_demography:
         deviating_pop = lambda wildcards: variable_parameters.loc[wildcards.setup, "deviating_pop"],
         opt_shifted = lambda wildcards: variable_parameters.loc[wildcards.setup, "opt_of_dev_pop"],
         opt_UK = lambda wildcards: variable_parameters.loc[wildcards.setup, "opt_of_UK"],
+        opt_p6 = lambda wildcards: variable_parameters.loc[wildcards.setup, "opt_of_p6"],
         w_shifted = lambda wildcards: variable_parameters.loc[wildcards.setup, "fitness_w_dev_pop"],
         w_UK = lambda wildcards: variable_parameters.loc[wildcards.setup, "fitness_w_UK"],
         dir = lambda wildcards: variable_parameters.loc[wildcards.setup, "slim_burnin_seed"]
     resources:
         mem = 60*1000,
-        time = 10*60
+        time = 24*60
     shell:
         '''
+        wd=$(pwd)
         module load any/slim/4.0
         cd "results/msprime_{wildcards.msprime_seed}/SLiM_burnin_{params.dir}"
         slim \
@@ -208,12 +214,13 @@ rule run_SLiM_demography:
         -d deviating_pop={params.deviating_pop} \
         -d opt_shifted={params.opt_shifted} \
         -d opt_UK={params.opt_UK} \
+        -d opt_p6={params.opt_p6} \
         -d w_shifted={params.w_shifted} \
         -d w_UK={params.w_UK} \
         -d l_chr={wildcards.len_chr} \
         -d n_chr={wildcards.n_chr} \
         -d burn_in_ID={wildcards.slim_burnin_seed} \
-        ../../../demography.slim 
+        ${{wd}}/scripts/demography.slim 
         '''
 
 
@@ -224,7 +231,8 @@ rule handle_vcfs:
     	".p7.vcf",".p31.vcf",".p41.vcf",".p51.vcf")
     output:
         multiext(master_prefix + "_all",
-    	".vcf.gz",".vcf.gz.tbi",".samples.txt")
+    	".vcf.gz",".vcf.gz.tbi",".samples.txt"),
+        demography_prefix + "vcf_backup/" + file_prefix + ".p7.vcf.gz"
     params:
         demodir = demography_prefix,
         file = file_prefix
@@ -239,17 +247,18 @@ rule handle_vcfs:
         for pop in p31 p41 p51 p7
         do
             bgzip {params.file}.${{pop}}.vcf
-            bcftools query -l {params.file}.${{pop}}.vcf.gz | sed 's/_//g' | awk -F'\t' -v pop=$pop 'BEGIN {{OFS = FS}} {{print $1, pop "_" $1}}' > samples.${{pop}}.txt
+            tabix -p vcf {params.file}.${{pop}}.vcf.gz
+            bcftools query -l {params.file}.${{pop}}.vcf.gz | sed 's/_//g' | awk -F'\\t' -v pop=$pop 'BEGIN {{OFS = FS}} {{print $1, pop "_" $1}}' > samples.${{pop}}.txt
             bcftools reheader -s samples.${{pop}}.txt {params.file}.${{pop}}.vcf.gz | bcftools view -Oz -i 'MT=1' -o m1_{params.file}.${{pop}}.vcf.gz
             tabix -p vcf m1_{params.file}.${{pop}}.vcf.gz
         done
         bcftools merge -Oz --missing-to-ref -o {params.file}_all.vcf.gz m1_{params.file}.{{p31,p41,p51,p7}}.vcf.gz
         tabix -p vcf {params.file}_all.vcf.gz
         rm m1_{params.file}.{{p31,p41,p51,p7}}.vcf.gz*
-        mkdir vcf_backup
+        mkdir -p vcf_backup
         mv {params.file}.{{p31,p41,p51,p7}}.vcf.gz* vcf_backup
         mv samples.{{p31,p41,p51,p7}}.txt vcf_backup
-        bcftools query -l {params.file}_all.vcf.gz | awk '{{print $1, $1}}' | awk -v OFS='\t' '{{sub(/_i[0-9]*/, "", $2)}} 1' > {params.file}_all.samples.txt
+        bcftools query -l {params.file}_all.vcf.gz | awk '{{print $1, $1}}' | awk '{{sub(/_i[0-9]*/, "", $2)}} 1' | sed 's/ /\\t/g' > {params.file}_all.samples.txt
         '''
     	
 
@@ -291,7 +300,7 @@ rule run_king:
         '''
         module load any/king/2.2.7
         king -b {params.file}.bed --kinship --prefix {params.file}
-	less {params.file}.kin | awk -v OFS='\t'  '$9 >= 0.0442 {{print $1 "_" $2, $1 "_" $3, $9}}' | tail -n +2 > {output.rel}
+	less {params.file}.kin | awk -v OFS='\\t'  '$9 >= 0.0442 {{print $1 "_" $2, $1 "_" $3, $9}}' | tail -n +2 > {output.rel}
         '''
 
 
@@ -308,7 +317,8 @@ rule filter_relatives:
         time = 30
     shell:
         '''
-        python filter_relatives.py -p {params.file}
+        wd=$(pwd)
+        python ${{wd}}/scripts/filter_relatives.py -p {params.file}
         '''
 
 
@@ -337,19 +347,17 @@ rule filter_vcf:
 # this defines the regions to be used in covMA calculation. This command should be modified if we want to include only regions meeting a given condition (will do that later on by reading the file with QTL betas and dafs in )
 rule create_bed:
 	input: 
-	    multiext(master_prefix,
-    	    ".QTLs.freq.tsv",".QTLs.list.tsv")
+	    multiext(master_prefix, ".QTLs.freq.tsv",".QTLs.list.tsv")
 	output: 
-	    multiext(master_prefix, ".filtered.bed", ".all_regions.bed")
+	    multiext(master_prefix + ".h2_" + str(config["h2_cutoff"]), ".bed", ".pos")
 	params:
-	    maf = 0.1,
-	    beta = 0.05,
+	    h2 = config["h2_cutoff"],
 	    file = master_prefix
 	shell:
 	    '''
+	    wd=$(pwd)
 	    module load any/R/4.0.3
-	    Rscript create_bed.R -l {wildcards.len_chr} -m {params.maf} -b {params.beta} -p {params.file}
-	    echo -e "1\\t0\\t20000000" > {params.file}.all_regions.bed
+	    Rscript ${{wd}}/scripts/create_bed.R -l {wildcards.len_chr} -t {params.h2} -p {params.file}
 	    '''
 
 
@@ -357,14 +365,15 @@ rule create_bed:
 
 fstat_params={'cov_ma':'-a p7 -b p31 -b p41 -b p51 cov_ma'}
 
+
 # this rule runs for about 2h on ~7K (relatives filtered) individuals, 1000 x 20K genome
 rule fstat_single:
     input: 
         vcf = master_prefix + ".no_rel.vcf.gz", 
-        bed = master_prefix + ".{regions}.bed", 
+        bed = master_prefix + ".h2_{h2_cutoff}.bed", 
         sets = master_prefix + ".no_rel.samples"
     output: 
-        master_prefix + ".{regions,[^.]+}.{stat,f3|f4|fst|cov_ma|f3M}"
+        master_prefix + ".h2_{h2_cutoff}.{stat,f3|f4|fst|cov_ma|f3M}"
     params: 
         opts = lambda w: fstat_params[w['stat']]
     threads: 10
@@ -373,32 +382,62 @@ rule fstat_single:
         time= lambda w: 1800
     shell: 
         '''
-        python Fstat_bed_vcf.py -p {threads} --single {params.opts} {input.vcf} {input.bed} {input.sets} > {output}
+        wd=$(pwd)
+        python ${{wd}}/scripts/Fstat_bed_vcf.py -p {threads} --single {params.opts} {input.vcf} {input.bed} {input.sets} > {output}
         '''
 
+rule prepare_dosage_files:
+    input:
+        vcf = demography_prefix + "vcf_backup/" + file_prefix + ".p7.vcf.gz",
+        pos = master_prefix + ".h2_{h2_cutoff}.pos",
+        samples = master_prefix + ".no_rel.samples"
+    output:
+        expand(demography_prefix_for_expand + "gwas_hits/" + file_prefix_for_expand + ".m{m}.h2_{{h2_cutoff}}.dosage.gz", m = ["3", "4", "5"])
+    params: 
+        out_dir = demography_prefix + "gwas_hits",
+        file_prefix = file_prefix
+    resources: 
+        mem = 1000, 
+        time = 30
+    shell: 
+        '''
+        module load bcftools/1.9
+        mkdir -p {params.out_dir}
+        less {input.samples} | grep p7 | cut -f1 | sed 's/p7_//g' | sort -V > {params.out_dir}/samples_no_rel.txt 
+        for m in {{3..5}}
+        do
+        bcftools view -S {params.out_dir}/samples_no_rel.txt -R {input.pos} -i "MT = ${{m}}" {input.vcf} | 
+        bcftools norm -m+ | bcftools +dosage | cut -f5- | tail -n +2 | sed 's/\.0//g' | gzip > {params.out_dir}/{params.file_prefix}.m${{m}}.h2_{wildcards.h2_cutoff}.dosage.gz
+        done
+        '''
+        
+        
 
 # this rule runs for about 2h on ~7K (relatives filtered) individuals, 1000 x 20K genome
 rule combine_covma_local_anc:
     input: 
-        covma = master_prefix + ".{regions}.cov_ma", 
+        covma = master_prefix + ".h2_{h2_cutoff}.cov_ma", 
         asPGS = master_prefix + ".asPGS.tsv", 
+        dosage = expand(demography_prefix_for_expand + "gwas_hits/" + file_prefix_for_expand + ".m{m}.h2_{{h2_cutoff}}.dosage.gz", m = ["3", "4", "5"]),
         sets = master_prefix + ".no_rel.samples"
     output: 
-        multiext(master_prefix + ".{regions}", ".pdf", ".asPGS+covma.csv")
+        multiext(master_prefix + ".h2_{h2_cutoff}", ".pdf", ".asPGS+covma.csv")
     params:
         deviating_pop = lambda wildcards: variable_parameters.loc[wildcards.setup, "deviating_pop"],
         opt_shifted = lambda wildcards: variable_parameters.loc[wildcards.setup, "opt_of_dev_pop"],
         opt_UK = lambda wildcards: variable_parameters.loc[wildcards.setup, "opt_of_UK"],
         w_shifted = lambda wildcards: variable_parameters.loc[wildcards.setup, "fitness_w_dev_pop"],
         w_UK = lambda wildcards: variable_parameters.loc[wildcards.setup, "fitness_w_UK"],
-        file = master_prefix
+        path = demography_prefix,
+        file = file_prefix
     resources: 
         mem = 1000, 
         time = 30
     shell: 
         '''
+        wd=$(pwd)
         module load any/R/4.0.3
-        Rscript covma_vs_la_server.R \
+        Rscript ${{wd}}/scripts/covma_vs_la_server.R \
         -s {wildcards.setup} \
         -w {wildcards.fitness_w} \
         -d {params.deviating_pop} \
@@ -406,8 +445,9 @@ rule combine_covma_local_anc:
         --w_pop {params.w_shifted} \
         --opt_uk {params.opt_UK} \
         --w_uk {params.w_UK} \
-        -r {wildcards.regions} \
-        -p {params.file}
+        -t {wildcards.h2_cutoff} \
+        -f {params.file} \
+        -p {params.path}
         '''
 
 
