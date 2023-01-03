@@ -127,6 +127,7 @@ initialize()
 		defineConstant("deviating_pop", 5); // ancestral pop with a deviating trait optimum
 		defineConstant("opt_shifted", 2.0); // trait optimum	for the deviating ancestral pop
 		defineConstant("opt_UK", 0.0); // trait optimum for the uk population
+		defineConstant("opt_p6", 0.0); // trait optimum for the uk population
 		defineConstant("w_shifted", INF); // trait optimum	for the deviating ancestral pop
 		defineConstant("w_UK", INF); // trait optimum for the uk population
 		
@@ -221,11 +222,11 @@ initialize()
 	
 	defineConstant("output_dir", paste0("demography_output/setup_" + setup +"_run-", simID, "/"));
 	
-	defineConstant("prefix", paste0("N-", N, "_l-", l_chr, "_n-", n_chr, "_opt-", opt, "_w-", w, "_sd_beta-", sd_beta, "_VE-", V_E + "_SLiM_burnin_seed-", burn_in_ID, "_SLiM."));
+	defineConstant("prefix", paste0("N-", N, "_l-", l_chr, "_n-", n_chr, "_opt-", opt, "_w-", w, "_sd_beta-", sd_beta, "_VE-", V_E + "_SLiM_burnin_seed-", burn_in_ID, "_SLiM"));
 	
-	defineConstant("input_from_SLiM_burnin", paste(prefix + "burn-in.sim"));
+	defineConstant("input_from_SLiM_burnin", paste(prefix + ".burn-in.sim"));
 	
-	defineConstant("prefix_out", paste(output_dir + prefix + "demography-" + simID));
+	defineConstant("prefix_out", paste(output_dir + prefix + "_setup_" + setup + "_seed-" + simID));
 	defineConstant("output_param", paste(prefix_out + ".param")); // name of an output files with simulation parameters
 	defineConstant("output_stats", paste(prefix_out + ".stats")); // name of an output files with stats
 	defineConstant("output_QTLs", paste(prefix_out + ".QTLs")); // name of an output file with QTLs
@@ -368,6 +369,7 @@ mutationEffect(m5)
 		"pop_with_deviating_opt",
 		"trait_optimum_of_the_dev_pop",
 		"trait_optimum_of_p7_UK",
+		"trait_optimum_of_p6_EEF",
 		"fitness_function_sd",
 		"fitness_function_sd_of_the_dev_pop",
 		"fitness_function_sd_of_p7_UK",
@@ -442,6 +444,7 @@ mutationEffect(m5)
 		paste0("p" + deviating_pop),
 		opt_shifted,
 		opt_UK,
+		opt_p6,
 		w,
 		w_shifted,
 		w_UK,
@@ -525,7 +528,7 @@ mutationEffect(m5)
 	{
 		// setting the trait optimum to opt_shifted for the deviating population, opt_UK for the UK (p7) population and to opt elsewise
 		trait_optimum = ((pop.id == deviating_pop | pop.id == deviating_pop + "1") ? opt_shifted
-			else pop.id == 7 ? opt_UK else opt);
+			else pop.id == 7 ? opt_UK else pop.id == 6 ? opt_p6 else opt);
 		
 		// and the same for w (fitness peak width	)	
 		trait_w = ((pop.id == deviating_pop | pop.id == deviating_pop + "1") ? w_shifted 
