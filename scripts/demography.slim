@@ -118,9 +118,10 @@ initialize()
 		defineConstant("N", 10e3); // population size
 		defineConstant("u", 1.25e-8); // mutation rate
 		defineConstant("r", 1e-8); // recombination rate
-		defineConstant("sd_beta", 0.1); // sd of the distribution where betas are drawn from (centered at 0)
-		//defineConstant("h2", 0.8); // set heritability to calcualte environmental noise sd !!! there are problems with starting from a target heritability because that forces environmental variance to adjust for the genotypic variance
-		defineConstant("V_E", 0.2); // set environmental variance (!!sd = sqrt(var)) to generate env noise
+		// defineConstant("sd_beta", 0.1); // sd of the distribution where betas are drawn from (centered at 0)
+		defineConstant("strong_frac", 0.0); // fraction of QTLs with strong effect
+		defineConstant("frac_h2", 0.0); // fraction of heritability explained by the strong effect loci
+		defineConstant("h2_target", 0.05); // set heritability to calcualte distribution of effect sizes (this is approxiamte heritability we aim at)
 		
 		defineConstant("w", INF); // omega - sd of the distibution of the fitnes function; INF results in neutrality
 		defineConstant("opt", 0.0); // trait optimum
@@ -136,9 +137,10 @@ initialize()
 		defineConstant("burn_in_ID", 7777777); // msprime seed
 		//setSeed(666666);
 		defineConstant("setup", 1);
+		defineConstant("V_E", 1.0); // set environmental variance (!!sd = sqrt(var)) to generate env noise	
 	}
 	
-	
+
 	
 	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////	
 	// defining various time points
@@ -222,7 +224,7 @@ initialize()
 	
 	defineConstant("output_dir", paste0("demography_output/setup_" + setup +"_run-", simID, "/"));
 	
-	defineConstant("prefix", paste0("N-", N, "_l-", l_chr, "_n-", n_chr, "_opt-", opt, "_w-", w, "_sd_beta-", sd_beta, "_VE-", V_E + "_SLiM_burnin_seed-", burn_in_ID, "_SLiM"));
+	defineConstant("prefix", paste0("N-", N, "_l-", l_chr, "_n-", n_chr, "_opt-", opt, "_w-", w, "_SLiM_burnin_seed-", burn_in_ID, "_SLiM"));
 	
 	defineConstant("input_from_SLiM_burnin", paste(prefix + ".burn-in.sim"));
 	
@@ -237,7 +239,11 @@ initialize()
 	initializeMutationType("m1", 0.5, "f", 0.0); // neut mutations
 	m1.mutationStackPolicy = "l";
 	
-	initializeMutationType("m2", 0.5, "n", 0.0, sd_beta); // QTL -- selection coefficients are actually effect sizes.
+	scriptForQTLs = "if (runif(1) < strong_frac) rnorm(1, 0, (frac_h2*h2_target/(n_chr*strong_frac))^0.5); else rnorm(1, 0, ((1-frac_h2)*h2_target/(n_chr*(1-strong_frac)))^0.5);";
+	
+	initializeMutationType("m2", 0.5, "s", scriptForQTLs);	
+
+	// initializeMutationType("m2", 0.5, "n", 0.0, sd_beta); // QTL -- selection coefficients are actually effect sizes.
 	m2.convertToSubstitution = F; // m2 are not converted to substitutions if fixed
 	//m2.mutationStackPolicy = "f"; // subsequent mutations at a given position in a given chromosome will be effectively ignored
 	//m2.mutationStackPolicy = "l"; // stacking to "last" - more concordant with assumption of the infinite site mutation model
@@ -329,7 +335,8 @@ mutationEffect(m5)
 	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////	
 	// reading input and recording m2 mutations (QTLs)
 	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-	// reading in the output of msprime
+
+	// reading in the output of SLiM_burnin
 	catn("reading input from " + input_from_SLiM_burnin);
 	sim.readFromPopulationFile(input_from_SLiM_burnin);
 	
@@ -359,12 +366,16 @@ mutationEffect(m5)
 		"initial_Ne",
 		"mutation_rate",
 		"recombination_rate",
+		
 		"chromosome_length",
 		"number_of_chromosomes",
-		
 		"QTL_maf_threshold",
-		"beta_sd",
+		
+		"strong_frac",
+		"frac_h2", 
+		"h2_target",				
 		"environmental_variance",
+		
 		"trait_optimum",
 		"pop_with_deviating_opt",
 		"trait_optimum_of_the_dev_pop",
@@ -434,12 +445,16 @@ mutationEffect(m5)
 		N,
 		u,
 		r,
+		
 		l_chr,
 		n_chr,
-		
 		maf,
-		sd_beta,
+		
+		strong_frac,
+		frac_h2, 
+		h2_target,
 		V_E,
+		
 		opt,
 		paste0("p" + deviating_pop),
 		opt_shifted,

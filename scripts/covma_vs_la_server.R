@@ -1,9 +1,9 @@
-library(dplyr)
-library(ggplot2)
-library(cowplot)
+# library(dplyr)
+# library(ggplot2)
 library(tidyverse)
 library(optparse)
 library(data.table)
+library(cowplot)
 
 # a function to normalize anything to a Z-score
 normalize <- function(x) ((x - mean(x))/sd(x))
@@ -12,7 +12,7 @@ normalize <- function(x) ((x - mean(x))/sd(x))
 get_lm_out <- function(anc, x, y) {
   lm_out <- asPGS_long %>% 
     group_by(ancestry) %>%
-    mutate(across(c(total_GV, asGV:covma), normalize)) %>%
+    mutate(across(c(total_GV, phenotype, asGV:covma), normalize)) %>%
     filter(ancestry == anc) %>%
     lm(as.formula(paste0(x, " ~ ", y)), .) %>%
     summary()
@@ -45,6 +45,7 @@ get_lm_plots <- function(col_x, col_y) {
       ggtitle(anc)+
       theme_bw()
     return(p)
+
   })
   lm_plots_grid <- plot_grid(plotlist = lm_plots, ncol = 3,  align = "h", axis = "rl")
   title <- ggdraw() +
@@ -148,12 +149,14 @@ covma <- read.table(paste0(prefix, ".h2_", h2_cutoff, ".cov_ma"))
 trait_stats <- read.table(paste0(prefix, ".stats.tsv"), header = T)
 
 pheno_mean <- as.numeric(trait_stats$mean_pheno[nrow(trait_stats)]) %>% round(., 3)
-pheno_sd <- as.numeric(trait_stats$var_pheno[nrow(trait_stats)]) %>% sqrt() %>% round(., 3)
+pheno_var <- as.numeric(trait_stats$var_pheno[nrow(trait_stats)]) %>% round(., 3)
+pheno_sd <- pheno_var %>% sqrt() %>% round(., 3)
 
 	
 
 geno_mean <- as.numeric(trait_stats$mean_geno[nrow(trait_stats)]) %>% round(., 3)
-geno_sd <- as.numeric(trait_stats$var_add[nrow(trait_stats)]) %>% sqrt() %>% round(., 3)
+geno_var <- as.numeric(trait_stats$var_add[nrow(trait_stats)]) %>% round(., 3)
+geno_sd <- geno_var %>% sqrt() %>% round(., 3)
 
 # extracting dosage for each ancestry
 
@@ -172,6 +175,7 @@ scores$gwas_total <- apply(scores, 1, sum)
 asPGS$id <- paste0("p7_i", seq(0,9999))
 asPGS <- asPGS %>% relocate(id, .before = PRS_m2) %>%
   rename("total_GV" = PRS_m2, "total_count" = Count_m2) %>%
+  mutate(phenotype = total_GV + rnorm(nrow(asPGS), 0, (pheno_var - geno_var)^0.5)) %>%
   filter(id %in% norel_list$V1) 
 
 asPGS <- cbind(asPGS, scores)
@@ -186,13 +190,15 @@ asPGS_long <- asPGS %>%
   select(-name) %>%
   pivot_wider(names_from = statistic, values_from = value) %>%
   rename("asGV" = PRS, "asCount" = Count) %>%  
-  mutate(ancestry = replace(ancestry, ancestry == "m3", "Anatolia"),
-         ancestry = replace(ancestry, ancestry == "m4", "WHG"),
-         ancestry = replace(ancestry, ancestry == "m5", "Yamnaya"),
-         anc_proportion = asCount/total_count,
-         gwas_anc_proportion = gwasCount/gwas_total,
-         mean_anc_beta = asGV/asCount,
-         asGV_weighted = asGV/anc_proportion)
+   mutate(ancestry = replace(ancestry, ancestry == "m3", "Anatolia"),
+          ancestry = replace(ancestry, ancestry == "m4", "WHG"),
+          ancestry = replace(ancestry, ancestry == "m5", "Yamnaya"),
+          anc_proportion = asCount/total_count,
+          gwas_anc_proportion = gwasCount/gwas_total,
+          mean_anc_beta = asGV/asCount,
+          asGV_weighted = asGV/anc_proportion)
+
+
 
 
 
@@ -210,9 +216,9 @@ covma <- covma %>%
 asPGS_long <- left_join(asPGS_long, covma)
 write.table(asPGS_long, file = paste0(prefix, ".h2_", h2_cutoff, ".asPGS+covma.csv"), sep = "\t", row.names = F, quote = F)
 
+print("asPGs + covma written succesfully")
 
-
-# plotting deneral description of the results by ancestry component
+# plotting general description of the results by ancestry component
 stats_cols <- c("gwas_anc_proportion", "anc_proportion", "asGV", 
                 "asGV_weighted", "mean_anc_beta", "covma")
 
@@ -231,6 +237,7 @@ descriptinve_plots <- plot_grid(plotlist = anc_plots, ncol = 3,  align = "h", ax
 
 # plotting relationship between ancestry proportions and covma
 
+
 plot_ancprop_gwas_ancprop <- get_lm_plots("gwas_anc_proportion", "anc_proportion")
 plot_ancprop_covma <- get_lm_plots("gwas_anc_proportion", "covma")
 plot_asGV_covma <- get_lm_plots("covma", "asGV")
@@ -239,9 +246,10 @@ plot_covma_totalGV <- get_lm_plots("covma", "total_GV")
 plot_asGV_totalGV <- get_lm_plots("asGV", "total_GV")
 
 df_covma_totalGV <- get_lm_stats("total_GV", "covma")
+df_covma_phenotype <- get_lm_stats("phenotype", "covma")
 df_ancprop_covma <- get_lm_stats("covma", "gwas_anc_proportion")
 df_ancprop_totalGV <- get_lm_stats("total_GV", "gwas_anc_proportion")
-df_stats <- rbind(df_covma_totalGV, df_ancprop_covma, df_ancprop_totalGV)
+df_stats <- rbind(df_covma_totalGV, df_covma_phenotype, df_ancprop_covma, df_ancprop_totalGV)
 
 
 h2 <- format(h2_cutoff, scientific = T, digits = 2)
@@ -341,5 +349,62 @@ print(plot_grid(general_title, descriptinve_plots,
 dev.off()
 
 
+# linear model with 2 ancestries simultaneously
+
+lm2pop <- asPGS_long %>% 
+  group_by(ancestry) %>%
+  mutate(across(c(total_GV, phenotype, asGV:covma), normalize)) %>%
+  select(id, phenotype, ancestry, covma) %>%
+  pivot_wider(names_from = ancestry, values_from = covma) %>%
+  lm(as.formula("phenotype ~ Anatolia + Yamnaya"), .) %>%
+  summary()
 
 
+beta1 <- lm2pop$coefficients[2,1] %>% round(3)
+beta2 <- lm2pop$coefficients[3,1] %>% round(3)
+pval1 <- lm2pop$coefficients[2,4]  %>% formatC(format = "e", digits = 2)
+pval2 <- lm2pop$coefficients[3,4]  %>% formatC(format = "e", digits = 2)
+R2 <- lm2pop$r.squared %>% round(3)
+
+
+sources <- tmp %>% 
+  select(pop, source_mean) %>%
+  pivot_wider(names_from = pop, values_from = source_mean, names_prefix = "source_")
+
+refs <- tmp %>% 
+  select(pop, ref_mean) %>%
+  pivot_wider(names_from = pop, values_from = ref_mean, names_prefix = "ref_")
+
+
+
+lm2pop_df <- data.frame(setup_i, beta1, beta2, pval1, pval2,  R2, pheno_mean, pheno_sd, geno_mean, geno_sd)
+
+
+names(lm2pop_df) <- c ("setup", "beta2_Anatolia", "beta2_Yamnaya", "pval2_Anatolia", "pval2_Yamnaya", 
+                       "R2", "pheno_mean", "pheno_sd", "geno_mean", "geno_sd")
+
+lm2pop_df <- cbind(lm2pop_df, sources, refs)
+
+
+lm2pop_df$meanGV_Anatolia <- mean_asGV$mean_anc_asGV[1]
+lm2pop_df$meanGV_WHG <- mean_asGV$mean_anc_asGV[2]
+lm2pop_df$meanGV_Yamnaya <- mean_asGV$mean_anc_asGV[3]
+
+
+
+betas <- df_stats %>%
+  filter(stat1 == "phenotype") %>%
+  select(pop, beta, setup) %>%
+  pivot_wider(names_from = pop, values_from = beta, names_prefix = "beta_")
+
+pvals <- df_stats %>%
+  filter(stat1 == "phenotype") %>%
+  select(pop, pval, setup) %>%
+  pivot_wider(names_from = pop, values_from = pval, names_prefix = "pval_")
+
+
+lm1 <- left_join(betas, pvals)
+
+lm2pop_df <- left_join(lm2pop_df, lm1)
+
+write.table(lm2pop_df, file = paste0(prefix, ".h2_", h2_cutoff, ".2pop_lm.stats"), sep = "\t", row.names = F, quote = F)

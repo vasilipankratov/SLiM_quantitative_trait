@@ -20,8 +20,9 @@ import pandas as pd
 #rec: 1e-8 - recombination rate within each chromosome
 #msprime_seed: 1162971105 - random seed used in msprime
 #trait_opt: 0.0 - default optimal value of the trait in all 3 stages. Can be overriden for one ancestral pop and UK if desired 
-#sd_beta: 0.1 - standard deviation of the 0-centered distribution from which per snp betas 
-#env_var: 0.9 - environmental variance - when modeling the phenotype the environmental noise is sampled from a 0-centered normal distribution with SD of env_var^0.5
+
+
+#env_var: 1.0 - environmental variance - when modeling the phenotype the environmental noise is sampled from a 0-centered normal distribution with SD of env_var^0.5 !! this is hard-coded in SLiM code now
 
 configfile: "config.yaml"
 
@@ -65,7 +66,9 @@ variable_parameters.index = variable_parameters.index.map(str)
 
 
 # creating the master prefix with common variables from the config file and creating wild cards for variable parameters
-output_path = "results/msprime_" + str(config["msprime_seed"]) + \
+# str(config["msprime_seed"]) + 
+
+output_path = "results/msprime_{msprime_seed}" + \
         "/SLiM_burnin_{slim_burnin_ID}" + \
         "/demography_output/setup_{setup}" + \
         "_run-{runID}" + \
@@ -74,8 +77,6 @@ output_path = "results/msprime_" + str(config["msprime_seed"]) + \
         "_n-" + str(config["n_chr"]) + \
         "_opt-" + str(config["trait_opt"]) + \
         "_w-{fitness_peak_w}" + \
-        "_sd_beta-" + str(config["sd_beta"]) + \
-        "_VE-" + str(config["env_var"]) + \
         "_SLiM_burnin_seed-{slim_burnin_ID}" + \
         "_SLiM_setup_{setup}" + \
         "_seed-{runID}"
@@ -83,6 +84,7 @@ output_path = "results/msprime_" + str(config["msprime_seed"]) + \
 # populating the wild cards in the above <output_path> with values from the <variable_parameters> df        
 output_files = expand(output_path,
         zip,
+        msprime_seed = variable_parameters.loc[:,"msprime_seed"],
         slim_burnin_ID = variable_parameters.loc[:,"slim_burnin_seed"],
         fitness_peak_w = variable_parameters.loc[:,"w"],
         setup = variable_parameters.loc[:,"setup"],
@@ -96,7 +98,7 @@ output_files = [path + "{ext}" for path in output_files]
 # here one can specify the extension of the ultimate output; this should allow to easily extend the pipeline if needed
 # output_ext = [".no_rel.vcf.gz"]
 output_ext = expand(".h2_" + str(config["h2_cutoff"]) + ".{filetype}",
-        filetype = ["asPGS+covma.csv", "pdf"])
+        filetype = ["asPGS+covma.csv", "pdf", "2pop_lm.stats"])
 
 
 rule all:
@@ -116,7 +118,7 @@ rule run_msprime:
         '''
         wd=$(pwd)
         cd results/msprime_{wildcards.msprime_seed}
-        python3 ${wd}/scripts/neutral_burn-in.py \
+        python3 ${{wd}}/scripts/neutral_burn-in.py \
         -N {wildcards.initial_Ne} \
         -l {wildcards.len_chr} \
         -n {wildcards.n_chr} \
@@ -129,7 +131,7 @@ rule run_msprime:
 
 burnin_prefix = "results/msprime_{msprime_seed}/SLiM_burnin_{slim_burnin_seed}/"
 demography_prefix = burnin_prefix + "demography_output/setup_{setup}_run-{slim_demography_seed}/"
-file_prefix = "N-{initial_Ne}_l-{len_chr}_n-{n_chr}_opt-{trait_opt}_w-{fitness_w}_sd_beta-{sd_beta}_VE-{env_var}_SLiM_burnin_seed-{slim_burnin_seed}_SLiM_setup_{setup}_seed-{slim_demography_seed}"
+file_prefix = "N-{initial_Ne}_l-{len_chr}_n-{n_chr}_opt-{trait_opt}_w-{fitness_w}_SLiM_burnin_seed-{slim_burnin_seed}_SLiM_setup_{setup}_seed-{slim_demography_seed}"
 master_prefix = demography_prefix + file_prefix
 
 
@@ -141,14 +143,18 @@ file_prefix_for_expand = file_prefix.replace("{", "{{").replace("}", "}}" )
 
 rule run_SLiM_burnin:
     input:
-    	"results/msprime_{msprime_seed}/msprime_burn-in_Ne_{initial_Ne}_length_{n_chr}x{len_chr}_seed_" + str(config["msprime_seed"]) + ".sim"
+    	"results/msprime_{msprime_seed}/msprime_burn-in_Ne_{initial_Ne}_length_{n_chr}x{len_chr}_seed_{msprime_seed}.sim"
     output:
-    	multiext(burnin_prefix + "N-{initial_Ne}_l-{len_chr}_n-{n_chr}_opt-{trait_opt}_w-{fitness_w}_sd_beta-{sd_beta}_VE-{env_var}_SLiM_burnin_seed-{slim_burnin_seed}_SLiM.burn-in",
+    	multiext(burnin_prefix + "N-{initial_Ne}_l-{len_chr}_n-{n_chr}_opt-{trait_opt}_w-{fitness_w}_SLiM_burnin_seed-{slim_burnin_seed}_SLiM.burn-in",
     	".sim",".stats.tsv",".QTLs.freq.tsv",".QTLs.list.tsv")
     params:
         mu = config["mu"],
         rec = config["rec"],
-        dir = "results/msprime_" + str(config["msprime_seed"])
+        dir = "results/msprime_{msprime_seed}",
+        strong_frac = config["strong_frac"],
+        frac_h2 = config["frac_h2"],
+        beta2 = config["beta2"],
+        env_var = config["env_var"]
     resources:
         mem = 30*1000,
         time = 5*60
@@ -162,12 +168,14 @@ rule run_SLiM_burnin:
     	-d N={wildcards.initial_Ne} \
     	-d u={params.mu} \
     	-d r={params.rec} \
-    	-d sd_beta={wildcards.sd_beta} \
-    	-d V_E={wildcards.env_var} \
     	-d w={wildcards.fitness_w} \
     	-d opt={wildcards.trait_opt} \
     	-d l_chr={wildcards.len_chr} \
     	-d n_chr={wildcards.n_chr} \
+    	-d strong_frac={params.strong_frac} \
+    	-d frac_h2={params.frac_h2} \
+    	-d h2_target={params.beta2} \
+    	-d V_E={params.env_var} \
     	-d msprime_seed={wildcards.msprime_seed} \
     	${{wd}}/scripts/read_msprime_run_burnin.slim 
     	mv *SLiM_burnin_seed-{wildcards.slim_burnin_seed}_SLiM.burn-in* SLiM_burnin_{wildcards.slim_burnin_seed}/
@@ -179,7 +187,7 @@ rule run_SLiM_burnin:
     	
 rule run_SLiM_demography:
     input:
-        burnin_prefix + "N-{initial_Ne}_l-{len_chr}_n-{n_chr}_opt-{trait_opt}_w-{fitness_w}_sd_beta-{sd_beta}_VE-{env_var}_SLiM_burnin_seed-{slim_burnin_seed}_SLiM.burn-in.sim"
+        burnin_prefix + "N-{initial_Ne}_l-{len_chr}_n-{n_chr}_opt-{trait_opt}_w-{fitness_w}_SLiM_burnin_seed-{slim_burnin_seed}_SLiM.burn-in.sim"
     output:
     	multiext(master_prefix,
     	".stats.tsv",".QTLs.freq.tsv",".QTLs.list.tsv",".asPGS.tsv",".param.list.tsv",".p7.vcf",".p31.vcf",".p41.vcf",".p51.vcf")
@@ -192,7 +200,11 @@ rule run_SLiM_demography:
         opt_p6 = lambda wildcards: variable_parameters.loc[wildcards.setup, "opt_of_p6"],
         w_shifted = lambda wildcards: variable_parameters.loc[wildcards.setup, "fitness_w_dev_pop"],
         w_UK = lambda wildcards: variable_parameters.loc[wildcards.setup, "fitness_w_UK"],
-        dir = lambda wildcards: variable_parameters.loc[wildcards.setup, "slim_burnin_seed"]
+        dir = lambda wildcards: variable_parameters.loc[wildcards.setup, "slim_burnin_seed"],
+        strong_frac = config["strong_frac"],
+        frac_h2 = config["frac_h2"],
+        beta2 = config["beta2"],
+        env_var = config["env_var"]
     resources:
         mem = 60*1000,
         time = 24*60
@@ -207,14 +219,16 @@ rule run_SLiM_demography:
         -d N={wildcards.initial_Ne} \
         -d u={params.mu} \
         -d r={params.rec} \
-        -d sd_beta={wildcards.sd_beta} \
-        -d V_E={wildcards.env_var} \
         -d w={wildcards.fitness_w} \
         -d opt={wildcards.trait_opt} \
         -d deviating_pop={params.deviating_pop} \
         -d opt_shifted={params.opt_shifted} \
         -d opt_UK={params.opt_UK} \
         -d opt_p6={params.opt_p6} \
+        -d strong_frac={params.strong_frac} \
+        -d frac_h2={params.frac_h2} \
+        -d h2_target={params.beta2} \
+        -d V_E={params.env_var} \
         -d w_shifted={params.w_shifted} \
         -d w_UK={params.w_UK} \
         -d l_chr={wildcards.len_chr} \
@@ -421,7 +435,7 @@ rule combine_covma_local_anc:
         dosage = expand(demography_prefix_for_expand + "gwas_hits/" + file_prefix_for_expand + ".m{m}.h2_{{h2_cutoff}}.dosage.gz", m = ["3", "4", "5"]),
         sets = master_prefix + ".no_rel.samples"
     output: 
-        multiext(master_prefix + ".h2_{h2_cutoff}", ".pdf", ".asPGS+covma.csv")
+        multiext(master_prefix + ".h2_{h2_cutoff}", ".pdf", ".asPGS+covma.csv", ".2pop_lm.stats")
     params:
         deviating_pop = lambda wildcards: variable_parameters.loc[wildcards.setup, "deviating_pop"],
         opt_shifted = lambda wildcards: variable_parameters.loc[wildcards.setup, "opt_of_dev_pop"],
