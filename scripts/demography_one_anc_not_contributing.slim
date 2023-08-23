@@ -1,0 +1,733 @@
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// defining funcitons
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/// # sampleIndsFromPop
+// a function to sample <sampleSize> individuals from a specified subpopulaton <subPop>
+function (object<Individual>)sampleIndsFromPop(o<Subpopulation>$ subPop, i$ sampleSize)
+{
+	sample = subPop.sampleIndividuals(sampleSize);
+	sample = sample[order(sample.index)]; // this is a precaution to have the order of individuals the same between vcf and the stdoutput
+	return sample;
+}
+
+/// # labelLocalAncestry
+// a function to place marker mutaitons on top of QTLs (m2 mutations) to trace local ancestry of QTL alleles in each individual
+function (void)labelLocalAncestry(o<Subpopulation>$ subPop, o<MutationType>$ mutType)
+{
+	genomes = subPop.genomes;
+	
+	// interating over all genomes in a population
+	for (g in genomes)
+	{
+		if (length(g.mutationsOfType(m2)) > 0)
+		{
+			m2muts_g = g.mutationsOfType(m2);
+			g.addNewMutation(mutType, betas[match(m2muts, m2muts_g) >= 0], m2muts_g.position); // placing marker mutations on top of m2 mutations, like an "epigenetic" mark
+		}
+	}
+}
+
+/// # calculateQuantitativeTrait
+// a function to scale individuals' fitness based on their quantitative trait
+function (float)calculateQuantitativeTrait(o<Subpopulation>$ subPop, numeric$ env_var, numeric$ optimum, numeric$ w_sd)
+{
+	// part 1calcualte the trait for each individual in the subpopulation and re-scales fitness
+	inds = subPop.individuals;
+	pop_id = subPop.id;
+	genevalue = inds.sumOfMutationsOfType(m2); // obtaining the genetic value of each individual
+	
+	// next we generate noise 
+	noise = rnorm(size(inds), 0, sqrt(env_var));
+	
+	// and add it to the phenotype
+	phenotypes = genevalue + noise;
+	
+	// calculating each individual's fitness using a Gaussian distribution with mean == opt and sd == w
+	inds.fitnessScaling = exp(-((optimum - phenotypes)^2) / (2 * (w_sd^2)));
+	
+	// part 2 calculate sum stats
+	Ne = subPop.individualCount;
+	mean_GV = mean(genevalue); // storing the mean genetic value for printing
+	var_add = var(genevalue); // recording variance of the genetic value (additive genetic variance)
+	mean_PV = mean(phenotypes); // mean phenotype for printing
+	var_pheno = var(phenotypes); // recording variance of the phenotype
+	h2 = var_add / var_pheno; // calculating narrow sense heritability (which in this model is equal to H)
+	
+	freqs = sim.mutationFrequencies(subPop, m2muts);
+	QTL_count = sum(freqs > 0 & freqs < 1);
+	
+	// storing the phenotype of each individual in its TagF. So far I don't plan to use it but just in case (modeling assortative mating or some other more advanced stuff).
+	//inds.tagF = phenotypes;
+	sumstat = c(pop_id, Ne, mean_GV, var_add, mean_PV, var_pheno, h2, QTL_count);
+	return (sumstat);
+}
+
+/// # outputTraitStats
+// a function to output basic summary stats
+function (void)outputTraitStats(f sumstats)
+{
+	catn("Generation " + sim.cycle + ": writing sumstats");
+	line = paste(sim.cycle, sumstats, sep="\t");
+	writeFile(paste0(output_stats, ".tsv"), line, append=T);
+}
+
+/// # outputQTLfreq
+// a function to output QTLs frequencies
+function (void)outputQTLfreq(o<Subpopulation>$ subPop)
+{
+	catn("Generation " + sim.cycle + ": writing QTL frequencies");
+	inds = subPop.individuals;
+	pop_id = subPop.id;
+	Ne = subPop.individualCount;
+	
+	// get allele frequency of every QTL
+	freqs = sim.mutationFrequencies(subPop, m2muts);
+	line = paste(sim.cycle, pop_id, Ne, freqs, sep="\t");
+	writeFile(paste0(output_QTLs, ".freq.tsv"), line, append=T);
+}
+
+
+/// # outputVCFsample
+// a function to output a vcf containing <N> samples from a given <subpop>
+function (void)outputVCFsample(o<Subpopulation>$ subPop, i$ n)
+{
+	sample = sampleIndsFromPop(subPop, n);
+	pop_id = subPop.id;
+	sample.genomes.outputVCF(filePath=paste0(prefix_out + ".p" + pop_id + ".vcf"));
+}
+
+
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// initiating simulation parameters
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+initialize()
+{
+	
+	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	// Defining core parameters (Ne, genetic architecture etc)
+	// This part is only executed in SLiMgui. When running in CLI on a cluster one should pass those parameters like this: slim -d u=1.25e-8 -d r=1e-8 -d N=10000 ... demography.slim 
+	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	
+	if (exists("slimgui"))
+	{
+		setwd("/home/vasili/ebc/projects/SLiM/Anc_contr_basal_model/msprime_burn-in");
+		defineConstant("N", 10e3); // population size
+		defineConstant("u", 1.25e-8); // mutation rate
+		defineConstant("r", 1e-8); // recombination rate
+		// defineConstant("sd_beta", 0.1); // sd of the distribution where betas are drawn from (centered at 0)
+		defineConstant("strong_frac", 0.0); // fraction of QTLs with strong effect
+		defineConstant("frac_h2", 0.0); // fraction of heritability explained by the strong effect loci
+		defineConstant("h2_target", 0.05); // set heritability to calcualte distribution of effect sizes (this is approxiamte heritability we aim at)
+		
+		defineConstant("w", INF); // omega - sd of the distibution of the fitnes function; INF results in neutrality
+		defineConstant("opt", 0.0); // trait optimum
+		defineConstant("deviating_pop", 5); // ancestral pop with a deviating trait optimum
+		defineConstant("opt_shifted", 2.0); // trait optimum	for the deviating ancestral pop
+		defineConstant("opt_UK", 0.0); // trait optimum for the uk population
+		defineConstant("opt_p6", 0.0); // trait optimum for the uk population
+		defineConstant("w_shifted", INF); // trait optimum	for the deviating ancestral pop
+		defineConstant("w_UK", INF); // trait optimum for the uk population
+		
+		defineConstant("l_chr", 20e3); // length of a single chromosome
+		defineConstant("n_chr", 10); // number of chromosomes in the genome
+		defineConstant("burn_in_ID", 7777777); // msprime seed
+		//setSeed(666666);
+		defineConstant("setup", 1);
+		defineConstant("V_E", 1.0); // set environmental variance (!!sd = sqrt(var)) to generate env noise	
+	}
+	
+
+	
+	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////	
+	// defining various time points
+	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	defineConstant("p0_growth_start", 3); // start of p0 (East Asia) growth
+	defineConstant("p0_migration", 961); // end of p0 (East Asia) growth, its migration to p2 (EHG) and extinction of p0
+	defineConstant("p1_p2_split", 647); // split between p1 ("Middle East - Caucasus") and p2 ("Europe"). This is also the time when they  start growing
+	defineConstant("p2_p4_split", 905); // split of Europe into p2 (EHG) and p4 (WHG). This is also the end of p2 and p1 growth
+	defineConstant("p1_p3_split", 1025); // split of Europe into p1 (CHG) and p3 (Anatolia).
+	defineConstant("p1_p2_merge", 1033); // merge of p1 (CHG) and p2 (EHG) = origin of Yamnaya. p1 and p2 go extinct
+	defineConstant("p3_p4_merge", 1230); // merge of p3 (Anatolia) and p4 (WHG) = origin of Early European farmer. p3 and p4 go extinct and are sampled
+	defineConstant("p5_p6_merge", 1360); // merge of p3 (Anatolia) and p4 (WHG) = origin of Early European farmer. p3 and p4 go extinct and are sampled
+	defineConstant("p7_growth_start", 1483); // p7 starts growing
+	defineConstant("sim_end", 1500); // end of the simulation
+	defineConstant("sample_source_split", 50); // we model a sister group for every admixing population and this sister group is actually sampled at the same time as the admixture happens. This parameter sets the depth of the split between the admixture source and its sampled sister population 
+	
+	
+	
+	
+	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	// defining effective population sizes
+	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	defineConstant("Ne_p0_initial", 7000); // Ne of p0 (East Asia) right after split
+	defineConstant("Ne_p1_initial", 7000); // Ne of p1 (West Eurasia) right after split from p0
+	defineConstant("Ne_p1_s2", 3500); // Ne of p1 (Middle East/Caucasus) right after split of p2
+	defineConstant("Ne_p2_s2", 3500); // Ne of p2 (Europe) right after split from p1
+	defineConstant("Ne_p2_s4", 3000); // Ne of p2 (EHG) right after split of p4 (WHG)
+	defineConstant("Ne_p4_s4", 3000); // Ne of p4 (WHG) right after split of p2 (EHG)
+	defineConstant("Ne_p3_s7", 2500); // Ne of p3 (Anatolian Neolithic) right after split from p1 (Middle East/Caucasus)
+	defineConstant("Ne_p1_s7", 3000); // Ne of p1 (CHG) right after split of p3 (Anatolian)
+	defineConstant("Ne_p5_s8", 5000); // Ne of p5 (Yamnaya)
+	defineConstant("Ne_p6_s12", 6000); // Ne of p6 (Early European Farmers)
+	defineConstant("Ne_p7_s16", 6000); // Ne of p7 (UK)
+	
+	
+	
+	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	// defining migration rates
+	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	defineConstant("p0_to_p2", 0.3); // single pulse migration rate from p0 to p2
+	defineConstant("p1_to_p5", 0.6); // fraction of p1 (CHG) in p5 (Yamnaya). The fraction of p2 (EHG) is defined as 1 - p1_to_p5
+	defineConstant("p3_to_p6", 1.0); // fraction of p3 (Anatolia) in p6 (Early Farmers). The fraction of p4 (WHG) is defined as 1 - p1_to_p5
+	defineConstant("p5_to_p7", 0.46); // fraction of p5 (Yamnaya) in p7 (UK). The fraction of p6 (Early Farmers) is defined as 1 - p1_to_p5
+	
+	
+	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	// defining growth rates
+	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	defineConstant("gr_p0", 0.00123); // growth of p0 (Asia) starting right after the split from west Eurasia
+	defineConstant("gr_p1", 0.0021); // growth of p1 (Middle East / Caucasus) starting after the split between p1 and p2 
+	defineConstant("gr_p2", 0.0021); // growth of p2 (Europe) starting after the split between p1 and p2
+	defineConstant("gr_p7", 0.18); // growth of p7 (UK) starting 17gen ~ 500 years ago. Results in ~ 300K individuals at present
+	
+	
+	
+	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	// setting maf threshold for picking QTLs
+	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	defineConstant("maf", 0.1); // maf threshold to select QTLs
+	
+	
+	
+	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	// output parameters
+	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	
+	// a vector of generations when to sample stats
+	defineConstant("output_cycles", unique(c(1, 500, 750, seq(1000, 1100, 100), seq(1100, 1500, 20)))); // print intermediate stats every <output_cycle> generation
+	// how many individuals per population to sample	
+	defineConstant("sample_size", 100);
+	// how many individuals per population to sample	
+	defineConstant("sample_size_UK", 10000);
+	
+	
+	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////	
+	// creating file prefices
+	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	
+	// using the random seed value as the simulation ID
+	defineConstant("simID", getSeed());
+	
+	defineConstant("output_dir", paste0("demography_output/setup_" + setup +"_run-", simID, "/"));
+	
+	defineConstant("prefix", paste0("N-", N, "_l-", l_chr, "_n-", n_chr, "_opt-", opt, "_w-", w, "_SLiM_burnin_seed-", burn_in_ID, "_SLiM"));
+	
+	defineConstant("input_from_SLiM_burnin", paste(prefix + ".burn-in.sim"));
+	
+	defineConstant("prefix_out", paste(output_dir + prefix + "_setup_" + setup + "_seed-" + simID));
+	defineConstant("output_param", paste(prefix_out + ".param")); // name of an output files with simulation parameters
+	defineConstant("output_stats", paste(prefix_out + ".stats")); // name of an output files with stats
+	defineConstant("output_QTLs", paste(prefix_out + ".QTLs")); // name of an output file with QTLs
+	defineConstant("output_sim_file", paste(prefix_out + ".sim")); // name of the output file with all the simulation to pick up at a later stage
+	initializeMutationRate(u);
+	
+	// mutation types
+	initializeMutationType("m1", 0.5, "f", 0.0); // neut mutations
+	m1.mutationStackPolicy = "l";
+	
+	scriptForQTLs = "if (runif(1) < strong_frac) rnorm(1, 0, (frac_h2*h2_target/(n_chr*strong_frac))^0.5); else rnorm(1, 0, ((1-frac_h2)*h2_target/(n_chr*(1-strong_frac)))^0.5);";
+	
+	initializeMutationType("m2", 0.5, "s", scriptForQTLs);	
+
+	// initializeMutationType("m2", 0.5, "n", 0.0, sd_beta); // QTL -- selection coefficients are actually effect sizes.
+	m2.convertToSubstitution = F; // m2 are not converted to substitutions if fixed
+	//m2.mutationStackPolicy = "f"; // subsequent mutations at a given position in a given chromosome will be effectively ignored
+	//m2.mutationStackPolicy = "l"; // stacking to "last" - more concordant with assumption of the infinite site mutation model
+	
+	
+	// we will use those 3 mutation types as marker mutations to mark local ancestry in the UKBB population. Note that SLiM automatically traces mutations' population of origin but this is not exactly what we need - a mutation might have originated in p0 and be present in all sources but we want to trace the ancestry of each given haplotype as coming from p3, p4 or p5
+	initializeMutationType("m3", 0.5, "f", 0.0); // marker mutation for p3 - Anatolia
+	m3.convertToSubstitution = F; // m3 are not converted to substitutions if fixed
+	initializeMutationType("m4", 0.5, "f", 0.0); // marker mutation for p4 - WHG
+	m4.convertToSubstitution = F; // m4 are not converted to substitutions if fixed
+	initializeMutationType("m5", 0.5, "f", 0.0); // marker mutation for p5 - Yamnaya
+	m5.convertToSubstitution = F; // m5 are not converted to substitutions if fixed
+	
+	// one genetic element type, the lenght is n_chr * l_chr
+	initializeGenomicElementType("g1", m1, 1.0);
+	initializeGenomicElement(g1, 0, n_chr * l_chr - 1);
+	
+	// here I create a recombination map with recombination rate of <r> within the chromosome and 0.5 between chromosomes
+	rates = rep(c(r, 0.5), n_chr);
+	rates = rates[0:(length(rates) - 2)];
+	ends1 = seq(l_chr - 1, n_chr * l_chr - 1, by=l_chr);
+	ends2 = seq(l_chr, n_chr * l_chr, by=l_chr);
+	ends = sort(c(ends1, ends2));
+	ends = ends[0:(length(ends) - 2)];
+	initializeRecombinationRate(rates, ends);
+}
+
+// Turning off direct fitness effects for all mutations with a selection coefficient. Instead selcoef serve as trait betas. Note that we will duplicate betas from m2 (actual QTLs) to marker mutations. This is only to simplify calculating partial ancestry-specific PGS - the only mutations that will actually effect phenotype (and fitness in models with selection) are m2.
+mutationEffect(m2)
+{
+	return 1.0;
+}
+
+mutationEffect(m3)
+{
+	return 1.0;
+}
+
+mutationEffect(m4)
+{
+	return 1.0;
+}
+
+mutationEffect(m5)
+{
+	return 1.0;
+}
+
+// This is a summary of population in the simulation for look-up:
+// Some populations "transform" after splits. E.g. p0 initially is an ancestral Eurasian population which further splits into p0 being East Asia and p1 being Europe
+//p0 - ancestral Eurasian => East Asian
+//p1 - West Eurasia => Middle East/Caucasus => CHG
+//p2 - Europe => EHG
+//p3 - Anatolian Neolithic
+//p4 - WHG
+//p5 - Yamnaya (p1 + p2)
+//p6 - Early European farmers (p3 + p4)
+//p7 - UK (p5 + p6)
+// here I re-schedule the execution of nearly all code blocks. The constants for the start and end of each block are defined above and if needed can be moved to the part executed only in slimgui so that they can be defined in the command line call. Note that despite rescheduling the each code block should have some timing defined which will be overriden by rescheduling.
+
+1 early()
+{
+	community.rescheduleScriptBlock(s1, start=p0_growth_start, end=p0_migration); // p0 growth
+	community.rescheduleScriptBlock(s2, start=p1_p2_split, end=p1_p2_split); // p1-p2 split
+	community.rescheduleScriptBlock(s3, start=p1_p2_split, end=p2_p4_split); // p1 and p2 growth
+	community.rescheduleScriptBlock(s4, start=p2_p4_split, end=p2_p4_split); // p2-p4 split
+	community.rescheduleScriptBlock(s5, start=p0_migration, end=p0_migration); // p0 migration to p2
+	community.rescheduleScriptBlock(s6, start=p0_migration, end=p0_migration); // p0 extinction
+	community.rescheduleScriptBlock(s7, start=p1_p3_split, end=p1_p3_split); // p1-p3 split
+	community.rescheduleScriptBlock(s8, start=p1_p2_merge, end=p1_p2_merge); // p1-p2 merge - origin of Yamnaya
+	community.rescheduleScriptBlock(s9, start=p1_p2_merge, end=p1_p2_merge); // p1-p2 extinction
+	community.rescheduleScriptBlock(s10, start=p3_p4_merge - sample_source_split, end=p3_p4_merge - sample_source_split); // sampled groups p31/p41 split from corresponding source groups p3/p4 that participate in admixture. 50 generations before admixture
+	community.rescheduleScriptBlock(s11, start=p3_p4_merge - 1, end=p3_p4_merge - 1); // labeling local ancestry in p3 and p4 1 generation before admixture
+	community.rescheduleScriptBlock(s12, start=p3_p4_merge, end=p3_p4_merge); // p3-p4 merge - origin of Early Farmers
+	community.rescheduleScriptBlock(s13, start=p3_p4_merge, end=p3_p4_merge); // extinction of p3 (Anatolia) and p2 (WHG)
+	community.rescheduleScriptBlock(s14, start=p5_p6_merge - sample_source_split, end=p5_p6_merge - sample_source_split); // sampled groups p51/p61 split from corresponding source groups p5/p6 that participate in admixture. 50 generations before admixture
+	community.rescheduleScriptBlock(s15, start=p5_p6_merge - 1, end=p5_p6_merge - 1); // labeling local ancestry in p5 and p6 1 generation before admixture
+	community.rescheduleScriptBlock(s16, start=p5_p6_merge, end=p5_p6_merge); // p5-p6 merge - origin of UK
+	community.rescheduleScriptBlock(s17, start=p5_p6_merge, end=p5_p6_merge); // extinction of p6 (Early Farmers) and p5 (Yamnaya)
+	community.rescheduleScriptBlock(s18, start=p7_growth_start, end=sim_end); // p7 (UK) starts growing 
+	community.rescheduleScriptBlock(s19, start=sim_end, end=sim_end); // simulation ends
+}
+
+
+
+1 late()
+{
+	
+	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////	
+	// reading input and recording m2 mutations (QTLs)
+	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+	// reading in the output of SLiM_burnin
+	catn("reading input from " + input_from_SLiM_burnin);
+	sim.readFromPopulationFile(input_from_SLiM_burnin);
+	
+	// make it generation 1
+	community.tick = 1;
+	sim.cycle = 1;
+	
+	// recording m2 mutations
+	m2muts_tmp = sim.mutationsOfType(m2); // finding all existing m2 mutations
+	m2muts_tmp = m2muts_tmp[order(m2muts_tmp.position)]; // order by position
+	defineConstant("m2muts", m2muts_tmp);
+	defineConstant("betas", m2muts.selectionCoeff); // recording their betas
+	defineConstant("pos", m2muts.position); // and positions
+	
+	
+	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////	
+	// preparing output files
+	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	
+	// write a file with simulation parameters
+	// createDirectory(output_dir); // I commented this step because snakemake already creates the needed directory
+	param_vector = c(
+		"setup",
+		"SLiM_demography_seed",
+		"SLiM_burn-in_seed",
+		
+		"initial_Ne",
+		"mutation_rate",
+		"recombination_rate",
+		
+		"chromosome_length",
+		"number_of_chromosomes",
+		"QTL_maf_threshold",
+		
+		"strong_frac",
+		"frac_h2", 
+		"h2_target",				
+		"environmental_variance",
+		
+		"trait_optimum",
+		"pop_with_deviating_opt",
+		"trait_optimum_of_the_dev_pop",
+		"trait_optimum_of_p7_UK",
+		"trait_optimum_of_p6_EEF",
+		"fitness_function_sd",
+		"fitness_function_sd_of_the_dev_pop",
+		"fitness_function_sd_of_p7_UK",
+		
+		"time_p0_growth_start_s1",
+		"time_p0_to_p2_migration_s5",
+		"time_p1_p2_split_s2",
+		"time_p2_p4_split_s4",
+		"time_p1_p3_split_s7",
+		"time_p1_p2_merge_s8",
+		"time_p3_p4_merge_s12",
+		"time_p5_p6_merge_s16",
+		"time_p7_growth_start_s18",
+		"time_simulation_end_s19",
+		"split_depth_between_source_and_sample",
+		
+		"Ne_p0_initial",
+		"Ne_p1_initial",
+		"Ne_p1_s2",
+		"Ne_p2_s2",
+		"Ne_p2_s4",
+		"Ne_p4_s4",
+		"Ne_p1_s7",
+		"Ne_p3_s7",
+		"Ne_p5_s8",
+		"Ne_p6_s12",
+		"Ne_p7_s16",
+		
+		"migration_p0_to_p2",
+		"migration_p1_to_p5",
+		"migration_p3_to_p6",
+		"migration_p5_to_p7",
+		
+		"growth_rate_gr_p0",
+		"growth_rate_gr_p1",
+		"growth_rate_gr_p2",
+		"growth_rate_gr_p7",
+		
+		"sample_size_of_ancient_pops",
+		"sample_size_UK",
+		
+		"p0",
+		"p1",
+		"p2",
+		"p3",
+		"p4",
+		"p5",
+		"p6",
+		"p7",
+		"m1",
+		"m2",
+		"m3",
+		"m4",
+		"m5"
+		
+		);
+	value_vector = c(
+		setup,
+		simID,
+		burn_in_ID,
+		
+		N,
+		u,
+		r,
+		
+		l_chr,
+		n_chr,
+		maf,
+		
+		strong_frac,
+		frac_h2, 
+		h2_target,
+		V_E,
+		
+		opt,
+		paste0("p" + deviating_pop),
+		opt_shifted,
+		opt_UK,
+		opt_p6,
+		w,
+		w_shifted,
+		w_UK,
+		
+		p0_growth_start,
+		p0_migration,
+		p1_p2_split,
+		p2_p4_split,
+		p1_p3_split,
+		p1_p2_merge,
+		p3_p4_merge,
+		p5_p6_merge,
+		p7_growth_start,
+		sim_end,
+		sample_source_split,
+		
+		Ne_p0_initial,
+		Ne_p1_initial,
+		Ne_p1_s2,
+		Ne_p2_s2,
+		Ne_p2_s4,
+		Ne_p4_s4,
+		Ne_p1_s7,
+		Ne_p3_s7,
+		Ne_p5_s8,
+		Ne_p6_s12,
+		Ne_p7_s16,
+		
+		p0_to_p2,
+		p1_to_p5,
+		p3_to_p6,
+		p5_to_p7,
+		
+		gr_p0,
+		gr_p1,
+		gr_p2,
+		gr_p7,
+		
+		sample_size,
+		sample_size_UK,
+		
+		"ancestral Eurasian => East Asian",
+		"West Eurasia => Middle East/Caucasus => CHG",
+		"Europe => EHG",
+		"Anatolian Neolithic",
+		"WHG",
+		"Yamnaya (p1 + p2)",
+		"Early European farmers (p3 + p4)",
+		"UK (p5 + p6)",
+		"neutral_mutations",
+		"QTLs",
+		"markers_of_Anatolia_LA",
+		"markers_of_WHG_LA",
+		"markers_of_Yamnaya_LA"
+		);
+	
+	
+	
+	df = DataFrame("parameters", param_vector, "values", value_vector);
+	writeFile(paste0(output_param, ".list.tsv"), df.serialize("tsv"));
+	
+	// write a file with QTL positions and betas
+	df = DataFrame("QTL", ("QTL" + seq(1, length(pos))), "pos", pos, "betas", betas);
+	writeFile(paste0(output_QTLs, ".list.tsv"), df.serialize("tsv"));
+	
+	// header for the output file with QTL freqs
+	line = paste("Generation", "pop_index", "Ne", ("QTL" + seq(1, length(pos))), sep="\t");
+	writeFile(paste0(output_QTLs, ".freq.tsv"), line, append=T);
+	
+	// header for the output file with sumstats
+	line = paste("Generation", "pop_index", "Ne", "mean_geno", "var_add", "mean_pheno", "var_pheno", "h2", "QTL_count", sep="\t");
+	writeFile(paste0(output_stats, ".tsv"), line, append=T);
+}
+
+
+
+// calculate fitness for each individual; it is faster do update fitness scaling than to have a fitness callback
+1: late()
+{
+	for (pop in sim.subpopulations)
+	{
+		// setting the trait optimum to opt_shifted for the deviating population, opt_UK for the UK (p7) population and to opt elsewise
+		trait_optimum = ((pop.id == deviating_pop | pop.id == deviating_pop + "1") ? opt_shifted
+			else pop.id == 7 ? opt_UK else pop.id == 6 ? opt_p6 else opt);
+		
+		// and the same for w (fitness peak width	)	
+		trait_w = ((pop.id == deviating_pop | pop.id == deviating_pop + "1") ? w_shifted 
+			else pop.id == 7 ? w_UK else w);
+		// calcualte the trait for each individual in the subpopulation and re-scales fitness
+		sumstats = calculateQuantitativeTrait(pop, V_E, trait_optimum, trait_w);
+		
+		// printing out some info every <output_cycle> generations
+		if (match(sim.cycle, output_cycles) >= 0)
+		{
+			outputTraitStats(sumstats);
+			outputQTLfreq(pop);
+		}
+	}
+}
+
+/// # T1 split  p0-p1 45 Kya p0(East Asia) and p1(Europe)
+2 early() /* split p1 from p0 */
+{
+	sim.addSubpopSplit("p1", Ne_p1_initial, p0);
+	p0.setSubpopulationSize(Ne_p0_initial);
+}
+
+s1 3:961 early() /* exp growth of p0 - EAS*/
+{
+	t = sim.cycle - p0_growth_start;
+	p0_size = round(Ne_p0_initial * (1 + gr_p0)^t);
+	p0.setSubpopulationSize(asInteger(p0_size));
+}
+
+/// # T2 split  p1-p2  25.6 Kya - "Middle East - Caucasus" and "Europe"
+s2 647 early() /* split p2 from p1 */
+{
+	sim.addSubpopSplit("p2", Ne_p2_s2, p1);
+	p1.setSubpopulationSize(Ne_p1_s2);
+}
+
+/// # T2-T4 growth of p1 and p2  17 Kya
+s3 647:905 early() /* exp growth */
+{
+	t = sim.cycle - p1_p2_split;
+	p1_size = round(Ne_p1_s2 * (1 + gr_p1)^t);
+	p2_size = round(Ne_p2_s2 * (1 + gr_p2)^t);
+	p1.setSubpopulationSize(asInteger(p1_size));
+	p2.setSubpopulationSize(asInteger(p2_size));
+}
+
+/// # T4 split  p2-p4  17 Kya - "Europe" splits into WHG and and WHG
+s4 905 early() /* split p4 (WHG) from p2  (EHG) */
+{
+	sim.addSubpopSplit("p4", Ne_p4_s4, p2);
+	p2.setSubpopulationSize(Ne_p2_s4);
+}
+
+/// # T5 migration from p0 (East Asia) to p2 (EHG) 16 Kya
+// I've changed the time here from 1025 to 967
+s5 961 early() /* migration p2 from p0 */
+{
+	p2.setMigrationRates(p0, p0_to_p2);
+}
+
+s6 961 late() /* stop the migration and kill p0 */
+{
+	p2.setMigrationRates(p0, 0); // set migration rate to 0 - we want a single pulse admixture
+	p0.setSubpopulationSize(0); // kill EAS just after they did their contribution to EHG
+}
+
+/// # T3 split  p1 (CHG) - p3  (Anatolia_N) 14.2 Kya
+s7 1025 early() /* split p3 from p1 */
+{
+	sim.addSubpopSplit("p3", Ne_p3_s7, p1);
+	p1.setSubpopulationSize(Ne_p1_s7);
+}
+
+/// # T6 merge  p1(CHG) + p2(EHG) = p5(Yamnaya)  14 Kya
+s8 1033 early() /* merge p1 + p2 */
+{
+	sim.addSubpop("p5", Ne_p5_s8);
+	p5.setMigrationRates(c(p1, p2), c(p1_to_p5, 1 - p1_to_p5));
+}
+
+s9 1033 late() /* stop p1 and p2 migrations to p5 */
+{
+	p5.setMigrationRates(c(p1, p2), c(0, 0));
+	c(p1, p2).setSubpopulationSize(0); // kill CHG and EHG
+}
+
+/// # creating sampled sister groups for p3 (Anatolia_N) and p4 (WHG) 
+s10 1180 early()
+{
+	sim.addSubpopSplit("p31", p3.individualCount, p3);
+	sim.addSubpopSplit("p41", p4.individualCount, p4);
+}
+
+/// # labeling haplotypes from p3 (Anatolia_N) and p4 (WHG) just before their admixture
+s11 1229 late()
+{
+	labelLocalAncestry(p3, m3);
+	labelLocalAncestry(p4, m4);
+}
+
+/// # T7 merge p3(Anatolia_N) + p4 (WHG) = p6 (Early Farmers) 8 Kya
+s12 1230 early() /* merge p3 + p4 */
+{
+	sim.addSubpop("p6", Ne_p6_s12);
+	p6.setMigrationRates(c(p3, p4), c(p3_to_p6, 1 - p3_to_p6));
+	outputVCFsample(p31, sample_size);
+	outputVCFsample(p41, sample_size);
+}
+
+s13 1230 late() /* stop p3 and p4 migration to p6 */
+{
+	p6.setMigrationRates(c(p3, p4), c(0, 0));
+	c(p3, p31, p4, p41).setSubpopulationSize(0); // kill Anatolia_N and WHG
+}
+
+/// # creating sampled sister groups for p5 (Yamnaya) and p6 (Early Farmers) 
+s14 1310 early()
+{
+	sim.addSubpopSplit("p51", p5.individualCount, p5);
+	sim.addSubpopSplit("p61", p6.individualCount, p6);
+}
+
+/// # labeling haplotypes from p5 (Yamnaya) before their admixture
+s15 1359 late()
+{
+	labelLocalAncestry(p5, m5);
+}
+
+/// # T8 merge p5(Yamnaya) + p6 (Early Farmers) = p7 (UKBB) 4.2 Kya
+// I've changed the time here from 1230 to 1360
+s16 1360 early() /* merge p5 + p6 */
+{
+	sim.addSubpop("p7", Ne_p7_s16);
+	p7.setMigrationRates(c(p5, p6), c(p5_to_p7, 1 - p5_to_p7));
+	outputVCFsample(p51, sample_size);
+}
+
+s17 1360 late() /* stop p5 and p6 migration to p7*/
+{
+	p7.setMigrationRates(c(p5, p6), c(0, 0));
+	c(p5, p51, p6, p61).setSubpopulationSize(0); // kill Yamnaya and Early Farmers
+}
+
+/// #growth  p7 17 Kya - maybe generations and not Kya?
+s18 1483:1500 early() /* exp growth */
+{
+	t = sim.cycle - p7_growth_start;
+	p7_size = round(Ne_p7_s16 * (1 + gr_p7)^t);
+	p7.setSubpopulationSize(asInteger(p7_size));
+}
+
+s19 1500 late()
+{
+	//outputVCFsample(p0, sample_size); // if we need to sample p0 - East Asia
+	
+	sample = sampleIndsFromPop(p7, sample_size_UK);
+	df_asPGS = DataFrame();
+	for (mut in c(m2, m3, m4, m5))
+	{
+		// calculate ancestry specific PRS for a given ancestry
+		asPRS = sample.sumOfMutationsOfType(mut);
+		PRS_m = paste0("PRS_m", asString(mut.id));
+		tmp = DataFrame(PRS_m, asPRS);
+		df_asPGS.cbind(tmp);
+		// calculate ancestry specific mutation count for a given ancestry
+		asMutCount = sample.countOfMutationsOfType(mut);
+		Count_m = paste0("Count_m", asString(mut.id));
+		tmp = DataFrame(Count_m, asMutCount);
+		df_asPGS.cbind(tmp);
+	}
+	writeFile(paste0(prefix_out, ".asPGS.tsv"), df_asPGS.serialize("tsv"));
+	sample.genomes.outputVCF(filePath=paste0(prefix_out + ".p7.vcf"));
+	sim.simulationFinished();
+}
+
+// this is just to keep it at hand if I will ever need it. So far I don't plan to simulate assortative mating
+//mateChoice() {
+//	phenotype = individual.tagF;
+//	others = sourceSubpop.individuals.tagF;
+//	return weights * dnorm(others, phenotype, 5.0);
+//}
+// save the state of the simulation
+//sim.outputFull(output_sim_file, binary=T);
+//	// output the substitution info to a file
+//	if(!writeFile(output_sub_file, asString(2*sum(sim.substitutions.selectionCoeff)) )){stop("Error writing substitutions file.");}	
+// writeFile(output_file, asString(2*sum(sim.substitutions.selectionCoeff)) );

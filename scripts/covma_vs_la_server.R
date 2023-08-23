@@ -158,18 +158,6 @@ geno_mean <- as.numeric(trait_stats$mean_geno[nrow(trait_stats)]) %>% round(., 3
 geno_var <- as.numeric(trait_stats$var_add[nrow(trait_stats)]) %>% round(., 3)
 geno_sd <- geno_var %>% sqrt() %>% round(., 3)
 
-# extracting dosage for each ancestry
-
-scores <- lapply(3:5, function(m){
-  dose <- fread(paste0(path, "gwas_hits/", file_pref,  ".m", m, ".h2_", h2_cutoff, ".dosage.gz"))
-  der_allele_score <- apply(dose, 2, sum)
-  return(der_allele_score)
-})
-
-scores <- do.call(cbind.data.frame, scores)
-names(scores) <- c("gwasCount_m3", "gwasCount_m4", "gwasCount_m5")
-scores$gwas_total <- apply(scores, 1, sum)
-
 
 # modify the asPGS file - add sample names and rename columns
 asPGS$id <- paste0("p7_i", seq(0,9999))
@@ -177,6 +165,34 @@ asPGS <- asPGS %>% relocate(id, .before = PRS_m2) %>%
   rename("total_GV" = PRS_m2, "total_count" = Count_m2) %>%
   mutate(phenotype = total_GV + rnorm(nrow(asPGS), 0, (pheno_var - geno_var)^0.5)) %>%
   filter(id %in% norel_list$V1) 
+
+
+# extracting dosage for each ancestry
+
+scores <- lapply(3:5, function(m){
+  der_allele_score <- tryCatch({
+    
+    dose <- fread(paste0(path, "gwas_hits/", file_pref,  ".m", m, ".h2_", h2_cutoff, ".dosage.gz"))
+    der_allele_score <- apply(dose, 2, sum)
+  },
+  warning = function(warn) {
+    print("WARNING")
+  },
+  error = function(err) {
+    print("empty file")
+    der_allele_score <- rep(0, length(asPGS$id))
+  },
+  finally = function(f) {
+    return(der_allele_score)
+  })
+  
+})
+
+
+scores <- do.call(cbind.data.frame, scores)
+names(scores) <- c("gwasCount_m3", "gwasCount_m4", "gwasCount_m5")
+scores$gwas_total <- apply(scores, 1, sum)
+
 
 asPGS <- cbind(asPGS, scores)
 
@@ -238,19 +254,20 @@ descriptinve_plots <- plot_grid(plotlist = anc_plots, ncol = 3,  align = "h", ax
 # plotting relationship between ancestry proportions and covma
 
 
-plot_ancprop_gwas_ancprop <- get_lm_plots("gwas_anc_proportion", "anc_proportion")
-plot_ancprop_covma <- get_lm_plots("gwas_anc_proportion", "covma")
-plot_asGV_covma <- get_lm_plots("covma", "asGV")
-plot_ancprop_totalGV <- get_lm_plots("gwas_anc_proportion", "total_GV")
+#plot_ancprop_gwas_ancprop <- get_lm_plots("gwas_anc_proportion", "anc_proportion")
+#plot_ancprop_covma <- get_lm_plots("gwas_anc_proportion", "covma")
+#plot_asGV_covma <- get_lm_plots("covma", "asGV")
+#plot_ancprop_totalGV <- get_lm_plots("gwas_anc_proportion", "total_GV")
 plot_covma_totalGV <- get_lm_plots("covma", "total_GV")
-plot_asGV_totalGV <- get_lm_plots("asGV", "total_GV")
+#plot_asGV_totalGV <- get_lm_plots("asGV", "total_GV")
 
 df_covma_totalGV <- get_lm_stats("total_GV", "covma")
 df_covma_phenotype <- get_lm_stats("phenotype", "covma")
-df_ancprop_covma <- get_lm_stats("covma", "gwas_anc_proportion")
-df_ancprop_totalGV <- get_lm_stats("total_GV", "gwas_anc_proportion")
-df_stats <- rbind(df_covma_totalGV, df_covma_phenotype, df_ancprop_covma, df_ancprop_totalGV)
+#df_ancprop_covma <- get_lm_stats("covma", "gwas_anc_proportion")
+#df_ancprop_totalGV <- get_lm_stats("total_GV", "gwas_anc_proportion")
+#df_stats <- rbind(df_covma_totalGV, df_covma_phenotype, df_ancprop_covma, df_ancprop_totalGV)
 
+df_stats <- rbind(df_covma_totalGV, df_covma_phenotype)
 
 h2 <- format(h2_cutoff, scientific = T, digits = 2)
 
@@ -339,12 +356,12 @@ general_title <- ggdraw() +
 
 pdf(paste0(prefix, ".h2_", h2_cutoff, ".pdf"), width = 12, height = 25)
 print(plot_grid(general_title, descriptinve_plots,
-                plot_ancprop_gwas_ancprop,
-                plot_ancprop_covma, 
-                plot_asGV_covma, 
-                plot_ancprop_totalGV, 
+                #plot_ancprop_gwas_ancprop,
+                #plot_ancprop_covma, 
+                #plot_asGV_covma, 
+                #plot_ancprop_totalGV, 
                 plot_covma_totalGV, 
-                plot_asGV_totalGV,
+                #plot_asGV_totalGV,
                 ncol = 1, rel_heights = c(0.2, 1.2, 1, 1, 1, 1, 1, 1)))
 dev.off()
 
