@@ -5,8 +5,8 @@ mu: 1.25e-8
 rec: 1e-8
 trait_opt: 0.0
 h2_cutoff: 0.00015
-strong_frac: 0.05
-frac_h2: 0.5
+strong_frac: 0
+frac_h2: 0
 beta2: 1.5
 env_var: 0.5
 

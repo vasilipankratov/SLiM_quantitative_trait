@@ -206,8 +206,8 @@ rule run_SLiM_demography:
         beta2 = config["beta2"],
         env_var = config["env_var"]
     resources:
-        mem = 60*1000,
-        time = 24*60
+        mem = 70*1000,
+        time = 48*60
     shell:
         '''
         wd=$(pwd)
@@ -252,7 +252,7 @@ rule handle_vcfs:
         file = file_prefix
     resources:
         mem = 300,
-        time = 1*60
+        time = 3*60
     shell:
         '''
         module load tabix
@@ -328,7 +328,7 @@ rule filter_relatives:
         file = master_prefix
     resources:
         mem = 1000,
-        time = 30
+        time = 60
     shell:
         '''
         wd=$(pwd)
@@ -346,7 +346,7 @@ rule filter_vcf:
         index = master_prefix + ".no_rel.vcf.gz.tbi"
     resources:
         mem = 500,
-        time = 30
+        time = 60
     shell:
         '''
         module load bcftools/1.9
